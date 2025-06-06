@@ -1,7 +1,8 @@
 from django.shortcuts import render
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.contrib.auth.models import User
+from rest_framework.permissions import IsAuthenticated
 
 @api_view(['POST'])
 def register(request):
@@ -18,3 +19,7 @@ def register(request):
     user = User.objects.create_user(username=username, email=email, password=password)
     return Response({'message': 'User created successfully'}, status=201)
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def protected_view(request):
+    return Response({'message': f'Hello, {request.user.username}! This is a protected endpoint.'})
