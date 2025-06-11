@@ -22,9 +22,16 @@ API.interceptors.response.use(
     async error => {
         const originalRequest = error.config;
 
-        // If 401 error, try to refresh the token
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        const isTokenExpired =
+            error.response?.status === 401 &&
+            error.response?.data?.code === 'token_not_valid' &&
+            error.response?.data?.messages?.some(
+                msg => msg.message === 'Token is expired' && msg.token_type === 'access'
+            );
+
+        if (isTokenExpired && !originalRequest._retry) {
             originalRequest._retry = true;
+
             try {
                 const refresh_token = localStorage.getItem('refresh_token');
                 const response = await axios.post('http://127.0.0.1:8000/api/token/refresh/', {
@@ -34,14 +41,14 @@ API.interceptors.response.use(
                 const new_access = response.data.access;
                 localStorage.setItem('access_token', new_access);
 
-                // Retry the original request with the new token
+                // Retry original request with new access token
                 originalRequest.headers['Authorization'] = `Bearer ${new_access}`;
-                return axios(originalRequest);
+                return API(originalRequest);
             } catch (refreshError) {
-                // Refresh failed — logout user
                 localStorage.removeItem('access_token');
                 localStorage.removeItem('refresh_token');
-                window.location.reload();  // or redirect to login
+                alert('Session expired. Please log in again.');
+                window.location.reload();
                 return Promise.reject(refreshError);
             }
         }
@@ -49,5 +56,6 @@ API.interceptors.response.use(
         return Promise.reject(error);
     }
 );
+
 
 export default API;
