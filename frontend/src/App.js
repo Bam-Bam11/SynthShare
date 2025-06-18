@@ -12,6 +12,12 @@ import API from './api';
 import { jwtDecode } from 'jwt-decode';
 import LoginForm from './LoginForm';
 import SynthInterface from './components/SynthInterface';
+import Navbar from './components/navbar';
+import SearchResults from './pages/searchresults';
+import UserProfile from './pages/userprofile';
+
+
+
 
 // Placeholder components
 const ProfilePage = () => <h2>Welcome to your profile</h2>;
@@ -100,17 +106,15 @@ function App() {
             <p>Logged in as {username}</p>
             <button onClick={handleLogout}>Logout</button>
 
-            {/* Persistent Nav Bar */}
-            <nav style={{ margin: '10px 0' }}>
-                <Link to="/profile" style={{ marginRight: '15px' }}>Profile</Link>
-                <Link to="/feed" style={{ marginRight: '15px' }}>Feed</Link>
-                <Link to="/build">Build</Link>
-            </nav>
+            <Navbar />
+
 
             <Routes>
+                <Route path="/profile/:id" element={<UserProfile />} />
                 <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/feed" element={<FeedPage />} />
                 <Route path="/build" element={<SynthInterface />} />
+                <Route path="/search" element={<SearchResults />} />
                 <Route path="*" element={<Navigate to="/profile" />} />
             </Routes>
         </div>

@@ -110,6 +110,17 @@ const SynthInterface = () => {
     <div className="p-4 max-w-md mx-auto rounded-xl shadow-lg bg-white">
       <h2 className="text-xl font-bold mb-4">Synth Interface</h2>
 
+      <div className="mb-4">
+        <label className="block mb-1 font-medium">Patch Name:</label>
+        <input
+          type="text"
+          value={patchName}
+          onChange={(e) => setPatchName(e.target.value)}
+          className="p-2 border rounded w-full"
+          placeholder="Enter patch name"
+        />
+      </div>
+
       <label className="block mb-2">Oscillator Type:</label>
       <select
         value={oscType}
@@ -121,17 +132,6 @@ const SynthInterface = () => {
         <option value="triangle">Triangle</option>
         <option value="sawtooth">Sawtooth</option>
       </select>
-
-      <div className="mb-4">
-        <label className="block mb-1 font-medium">Patch Name:</label>
-        <input
-          type="text"
-          value={patchName}
-          onChange={(e) => setPatchName(e.target.value)}
-          className="p-2 border rounded w-full"
-          placeholder="Enter patch name"
-        />
-      </div>
 
       <div className="mb-2">Attack: {attack.toFixed(2)} s</div>
       <input type="range" min="0" max="2" step="0.01" value={attack} onChange={(e) => setAttack(parseFloat(e.target.value))} />

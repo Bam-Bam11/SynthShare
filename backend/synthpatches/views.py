@@ -1,19 +1,34 @@
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, filters
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.contrib.auth.models import User
 from .models import Patch
-from .serializers import PatchSerializer
+from .serializers import PatchSerializer, UserSerializer
 
 # PATCH API VIEWSET
 class PatchViewSet(viewsets.ModelViewSet):
-    queryset = Patch.objects.all()
     serializer_class = PatchSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = Patch.objects.all().order_by('-created_at') 
+        uploaded_by = self.request.query_params.get('uploaded_by')
+        parent_id = self.request.query_params.get('parent')
+        if uploaded_by:
+            queryset = queryset.filter(uploaded_by__id=uploaded_by)
+        if parent_id:
+            queryset = queryset.filter(parent__id=parent_id)
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(uploaded_by=self.request.user)
 
+# USER VIEWSET — only for search
+class UserViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = User.objects.all().order_by('username') 
+    serializer_class = UserSerializer
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['username']
 
 # USER REGISTRATION ENDPOINT
 @api_view(['POST'])
