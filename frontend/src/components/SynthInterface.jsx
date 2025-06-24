@@ -9,6 +9,8 @@ const SynthInterface = () => {
   const [decay, setDecay] = useState(0.2);
   const [sustain, setSustain] = useState(0.7);
   const [release, setRelease] = useState(0.5);
+  const [note, setNote] = useState('C4');
+  const [duration, setDuration] = useState('8n');
   const [synth, setSynth] = useState(null);
   const [savedPatch, setSavedPatch] = useState(null);
 
@@ -25,18 +27,15 @@ const SynthInterface = () => {
 
   const playNote = () => {
     Tone.start();
-    synth.triggerAttackRelease('C4', '8n');
+    synth.triggerAttackRelease(note, duration);
   };
 
   const handleSavePatch = () => {
     const patch = {
       oscillator: oscType,
-      envelope: {
-        attack,
-        decay,
-        sustain,
-        release,
-      },
+      envelope: { attack, decay, sustain, release },
+      note,
+      duration,
     };
     setSavedPatch(patch);
     console.log('Saved patch:', patch);
@@ -144,6 +143,28 @@ const SynthInterface = () => {
 
       <div className="mb-2">Release: {release.toFixed(2)} s</div>
       <input type="range" min="0" max="3" step="0.01" value={release} onChange={(e) => setRelease(parseFloat(e.target.value))} />
+
+      <label className="block mt-4 mb-2">Note:</label>
+      <select
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        className="mb-4 p-2 border rounded w-full"
+      >
+        {['C3', 'D3', 'E3', 'F3', 'G3', 'A3', 'B3', 'C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5'].map(n => (
+          <option key={n} value={n}>{n}</option>
+        ))}
+      </select>
+
+      <label className="block mb-2">Duration:</label>
+      <select
+        value={duration}
+        onChange={(e) => setDuration(e.target.value)}
+        className="mb-4 p-2 border rounded w-full"
+      >
+        {['2n', '4n', '8n', '16n', '32n'].map(d => (
+          <option key={d} value={d}>{d}</option>
+        ))}
+      </select>
 
       <button
         onClick={playNote}

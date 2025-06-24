@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import API from './api';
+import { jwtDecode } from 'jwt-decode';
 
 function LoginForm({ setToken }) {
     const [formData, setFormData] = useState({ username: '', password: '' });
@@ -11,13 +12,29 @@ function LoginForm({ setToken }) {
 
     const handleSubmit = async e => {
         e.preventDefault();
+
+        //  Add this to check what you're submitting
+        console.log('Logging in with:', formData);
+
         try {
             const response = await API.post('/token/', formData);
-            setToken(response.data.access);
-            localStorage.setItem('access_token', response.data.access);
-            localStorage.setItem('refresh_token', response.data.refresh);
+
+            const access = response.data.access;
+            const refresh = response.data.refresh;
+
+            // Decode access token
+            const decoded = jwtDecode(access);
+
+            // Store tokens and user ID
+            localStorage.setItem('access_token', access);
+            localStorage.setItem('refresh_token', refresh);
+            localStorage.setItem('user_id', decoded.user_id);
+
+            setToken(access);
             setError('');
         } catch (err) {
+            //  Log full error from backend
+            console.error('Login error:', err.response?.data || err);
             setError('Login failed. Please check your credentials.');
         }
     };
@@ -45,7 +62,6 @@ function LoginForm({ setToken }) {
             {error && <p style={{ color: 'red' }}>{error}</p>}
         </form>
     );
-
 }
 
 export default LoginForm;

@@ -15,13 +15,8 @@ import SynthInterface from './components/SynthInterface';
 import Navbar from './components/navbar';
 import SearchResults from './pages/searchresults';
 import UserProfile from './pages/userprofile';
+import FeedPage from './pages/FeedPage';
 
-
-
-
-// Placeholder components
-const ProfilePage = () => <h2>Welcome to your profile</h2>;
-const FeedPage = () => <h2>Here is your feed</h2>;
 
 function App() {
     const [token, setToken] = useState(localStorage.getItem('access_token') || '');
@@ -111,7 +106,7 @@ function App() {
 
             <Routes>
                 <Route path="/profile/:id" element={<UserProfile />} />
-                <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/profile" element={<UserProfile isSelfProfile={true} />} />
                 <Route path="/feed" element={<FeedPage />} />
                 <Route path="/build" element={<SynthInterface />} />
                 <Route path="/search" element={<SearchResults />} />
