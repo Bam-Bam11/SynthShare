@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'synthpatches',
+    'rest_framework.authtoken',
 ]
 
 MIDDLEWARE = [
@@ -116,9 +117,19 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.AllowAny',  # default for now
     ),
 }
+
 CORS_ALLOW_ALL_ORIGINS = True
+
+# JWT Token Lifetime Settings
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+}

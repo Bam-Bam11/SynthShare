@@ -9,14 +9,13 @@ import {
     useLocation
 } from 'react-router-dom';
 import API from './api';
-import { jwtDecode } from 'jwt-decode';
 import LoginForm from './LoginForm';
 import SynthInterface from './components/SynthInterface';
 import Navbar from './components/navbar';
 import SearchResults from './pages/searchresults';
 import UserProfile from './pages/userprofile';
 import FeedPage from './pages/FeedPage';
-
+import PatchDetail from './pages/patchdetail';
 
 function App() {
     const [token, setToken] = useState(localStorage.getItem('access_token') || '');
@@ -27,20 +26,23 @@ function App() {
     const location = useLocation();
 
     useEffect(() => {
-        if (token) {
-            try {
-                const decoded = jwtDecode(token);
-                setUsername(decoded.username || decoded.user_id);
-                if (location.pathname === '/') {
-                    navigate('/profile'); // redirect after login
+        const fetchCurrentUser = async () => {
+            if (token) {
+                try {
+                    const res = await API.get('/users/me/');
+                    setUsername(res.data.username);
+                    if (location.pathname === '/') {
+                        navigate(`/profile/${res.data.username}`);
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch current user:', err);
+                    setUsername('');
                 }
-            } catch (err) {
-                console.error('Failed to decode token:', err);
+            } else {
                 setUsername('');
             }
-        } else {
-            setUsername('');
-        }
+        };
+        fetchCurrentUser();
     }, [token, location.pathname, navigate]);
 
     const handleLogout = () => {
@@ -103,14 +105,13 @@ function App() {
 
             <Navbar />
 
-
             <Routes>
-                <Route path="/profile/:id" element={<UserProfile />} />
-                <Route path="/profile" element={<UserProfile isSelfProfile={true} />} />
+                <Route path="/profile/:username" element={<UserProfile />} />
                 <Route path="/feed" element={<FeedPage />} />
                 <Route path="/build" element={<SynthInterface />} />
                 <Route path="/search" element={<SearchResults />} />
-                <Route path="*" element={<Navigate to="/profile" />} />
+                <Route path="/patches/:id" element={<PatchDetail />} />
+                <Route path="*" element={<Navigate to={`/profile/${username}`} />} />
             </Routes>
         </div>
     );

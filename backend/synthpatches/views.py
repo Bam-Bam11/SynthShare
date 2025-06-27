@@ -24,12 +24,13 @@ class PatchViewSet(viewsets.ModelViewSet):
         serializer.save(uploaded_by=self.request.user)
 
 
-# USER VIEWSET — only for search
+# USER VIEWSET — for search by username
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = User.objects.all().order_by('username')
     serializer_class = UserSerializer
     filter_backends = [filters.SearchFilter]
     search_fields = ['username']
+    lookup_field = 'username'
 
 
 # USER REGISTRATION ENDPOINT
@@ -47,6 +48,25 @@ def register(request):
 
     user = User.objects.create_user(username=username, email=email, password=password)
     return Response({'message': 'User created successfully'}, status=201)
+
+
+# USER DETAIL BY USERNAME ENDPOINT
+@api_view(['GET'])
+def get_user_by_username(request, username):
+    try:
+        user = User.objects.get(username=username)
+        serializer = UserSerializer(user)
+        return Response(serializer.data)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found'}, status=404)
+
+
+# NEW: CURRENT USER INFO ENDPOINT (/users/me/)
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def current_user_view(request):
+    serializer = UserSerializer(request.user)
+    return Response(serializer.data)
 
 
 # PROTECTED EXAMPLE VIEW

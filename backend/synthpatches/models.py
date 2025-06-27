@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 
 class Patch(models.Model):
     name = models.CharField(max_length=100)
+    description = models.CharField(max_length=500, blank=True, default='')
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='patches')
     parameters = models.JSONField()
     synth_type = models.CharField(max_length=50)

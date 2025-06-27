@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { jwtDecode } from 'jwt-decode';
 import * as Tone from 'tone';
 import API from '../api';
 
+
 const UserProfile = ({ isSelfProfile = false }) => {
-    const { id } = useParams();
+    const { username } = useParams();
     const [user, setUser] = useState(null);
     const [patches, setPatches] = useState([]);
     const [isFollowing, setIsFollowing] = useState(false);
@@ -17,7 +18,7 @@ const UserProfile = ({ isSelfProfile = false }) => {
         API.get('/follows/')
             .then(res => {
                 const following = res.data.some(
-                    f => f.follower === currentId && f.following === parseInt(targetId)
+                    f => f.follower === currentId && f.following === targetId
                 );
                 setIsFollowing(following);
             })
@@ -30,35 +31,40 @@ const UserProfile = ({ isSelfProfile = false }) => {
 
         try {
             const decoded = jwtDecode(token);
-            const currentId = decoded.user_id;
-            const targetId = id || currentId;
+            setCurrentUserId(decoded.user_id);
 
-            setCurrentUserId(currentId);
+            // If no username in URL and viewing self profile, fetch own username
+            const targetUsername = username || decoded.username;
 
-            API.get(`/users/${targetId}/`)
-                .then(res => setUser(res.data))
+            API.get(`/users/${targetUsername}/`)
+                .then(res => {
+                    setUser(res.data);
+                    const targetId = res.data.id;
+
+                    // Fetch patches by user ID
+                    API.get(`/patches/?uploaded_by=${targetId}`)
+                        .then(res => setPatches(res.data))
+                        .catch(err => {
+                            console.error('Could not fetch patches', err);
+                            setPatches([]);
+                        });
+
+                    checkFollowStatus(targetId, decoded.user_id);
+                })
                 .catch(err => {
                     console.error('User not found', err);
                     setUser(null);
                 });
 
-            API.get(`/patches/?uploaded_by=${targetId}`)
-                .then(res => setPatches(res.data))
-                .catch(err => {
-                    console.error('Could not fetch patches', err);
-                    setPatches([]);
-                });
-
-            checkFollowStatus(targetId, currentId);
         } catch (err) {
             console.error('Token decoding failed:', err);
         }
-    }, [id, checkFollowStatus]);
+    }, [username, checkFollowStatus]);
 
     const handleFollow = async () => {
         try {
-            await API.post('/follows/', { following: id });
-            checkFollowStatus(id, currentUserId);
+            await API.post('/follows/', { following: user.id });
+            checkFollowStatus(user.id, currentUserId);
         } catch (err) {
             console.error('Failed to follow:', err.response?.data || err);
         }
@@ -66,8 +72,8 @@ const UserProfile = ({ isSelfProfile = false }) => {
 
     const handleUnfollow = async () => {
         try {
-            await API.post('/follows/unfollow/', { following: id });
-            checkFollowStatus(id, currentUserId);
+            await API.post('/follows/unfollow/', { following: user.id });
+            checkFollowStatus(user.id, currentUserId);
         } catch (err) {
             console.error('Failed to unfollow:', err.response?.data || err);
         }
@@ -106,10 +112,16 @@ const UserProfile = ({ isSelfProfile = false }) => {
                 <ul>
                     {patches.map(patch => (
                         <li key={patch.id}>
-                            <strong>{patch.name}</strong> ({new Date(patch.created_at).toLocaleString()})
+                            <strong>
+                                <Link to={`/patches/${patch.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
+                                    {patch.name}
+                                </Link>
+                            </strong>{' '}
+                            ({new Date(patch.created_at).toLocaleString()})
                             <button style={{ marginLeft: '10px' }} onClick={() => playPatch(patch)}>Play</button>
                         </li>
                     ))}
+
                 </ul>
             ) : (
                 <p>This user has not posted any patches yet.</p>

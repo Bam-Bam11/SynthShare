@@ -11,9 +11,12 @@ class PatchSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'name',
+            'description',
             'uploaded_by',
             'parameters',
             'synth_type',
+            'note',
+            'duration',
             'created_at',
             'downloads',
             'forks',
