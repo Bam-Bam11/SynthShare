@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import API from '../api';
-import * as Tone from 'tone';
+import PlayPatch from '../components/PlayPatch';
 import { Link } from 'react-router-dom';
 
 const FeedPage = () => {
@@ -24,29 +24,6 @@ const FeedPage = () => {
 
         fetchFeed();
     }, []);
-
-    const playPatch = async (patch) => {
-        await Tone.start();
-
-        const params = patch.parameters || {};
-        const oscillatorType = params.oscillator || 'sine';
-        const envelope = params.envelope || {};
-
-        const note = patch.note || 'C4';
-        const duration = patch.duration || '8n';
-
-        const synth = new Tone.Synth({
-            oscillator: { type: oscillatorType },
-            envelope: {
-                attack: envelope.attack ?? 0.1,
-                decay: envelope.decay ?? 0.2,
-                sustain: envelope.sustain ?? 0.7,
-                release: envelope.release ?? 0.5
-            }
-        }).toDestination();
-
-        synth.triggerAttackRelease(note, duration);
-    };
 
     return (
         <div style={{ padding: '20px' }}>
@@ -77,7 +54,7 @@ const FeedPage = () => {
                             <br />
                             Posted: {new Date(patch.created_at).toLocaleString()}
                             <button
-                                onClick={() => playPatch(patch)}
+                                onClick={() => PlayPatch(patch)}
                                 style={{ marginLeft: '10px' }}
                             >
                                 Play

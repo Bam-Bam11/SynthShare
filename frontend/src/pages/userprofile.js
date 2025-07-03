@@ -1,9 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { jwtDecode } from 'jwt-decode';
-import * as Tone from 'tone';
 import API from '../api';
-
+import PlayPatch from '../components/PlayPatch';
 
 const UserProfile = ({ isSelfProfile = false }) => {
     const { username } = useParams();
@@ -33,7 +32,6 @@ const UserProfile = ({ isSelfProfile = false }) => {
             const decoded = jwtDecode(token);
             setCurrentUserId(decoded.user_id);
 
-            // If no username in URL and viewing self profile, fetch own username
             const targetUsername = username || decoded.username;
 
             API.get(`/users/${targetUsername}/`)
@@ -41,7 +39,6 @@ const UserProfile = ({ isSelfProfile = false }) => {
                     setUser(res.data);
                     const targetId = res.data.id;
 
-                    // Fetch patches by user ID
                     API.get(`/patches/?uploaded_by=${targetId}`)
                         .then(res => setPatches(res.data))
                         .catch(err => {
@@ -79,19 +76,6 @@ const UserProfile = ({ isSelfProfile = false }) => {
         }
     };
 
-    const playPatch = async (patch) => {
-        await Tone.start();
-        const note = patch.note || patch.parameters?.note || 'C4';
-        const duration = patch.duration || patch.parameters?.duration || '8n';
-
-        const synth = new Tone.Synth({
-            oscillator: { type: patch.parameters?.oscillator || 'sine' },
-            envelope: patch.parameters?.envelope || {}
-        }).toDestination();
-
-        synth.triggerAttackRelease(note, duration);
-    };
-
     if (!user) return <p>Loading user...</p>;
 
     return (
@@ -118,10 +102,14 @@ const UserProfile = ({ isSelfProfile = false }) => {
                                 </Link>
                             </strong>{' '}
                             ({new Date(patch.created_at).toLocaleString()})
-                            <button style={{ marginLeft: '10px' }} onClick={() => playPatch(patch)}>Play</button>
+                            <button
+                                style={{ marginLeft: '10px' }}
+                                onClick={() => PlayPatch(patch)}
+                            >
+                                Play
+                            </button>
                         </li>
                     ))}
-
                 </ul>
             ) : (
                 <p>This user has not posted any patches yet.</p>

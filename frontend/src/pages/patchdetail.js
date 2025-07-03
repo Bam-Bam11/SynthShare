@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import * as Tone from 'tone';
 import API from '../api';
+import PlayPatch from '../components/PlayPatch';
 
 const PatchDetail = () => {
     const { id } = useParams();
@@ -20,22 +20,6 @@ const PatchDetail = () => {
         fetchPatch();
     }, [id]);
 
-    const playPatch = async () => {
-        if (!patch) return;
-
-        await Tone.start();
-
-        const note = patch.parameters.note || 'C4';
-        const duration = patch.parameters.duration || '8n';
-
-        const synth = new Tone.Synth({
-            oscillator: { type: patch.parameters.oscillator || 'sine' },
-            envelope: patch.parameters.envelope || {}
-        }).toDestination();
-
-        synth.triggerAttackRelease(note, duration);
-    };
-
     if (!patch) return <p>Loading patch details...</p>;
 
     return (
@@ -52,7 +36,7 @@ const PatchDetail = () => {
                 {JSON.stringify(patch.parameters, null, 2)}
             </pre>
 
-            <button onClick={playPatch}>Play Patch</button>
+            <button onClick={() => PlayPatch(patch)}>Play Patch</button>
         </div>
     );
 };
