@@ -1,47 +1,90 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
+import { useChannelRack } from '../context/ChannelRackContext';
+import * as Tone from 'tone';
+import PlayPatch from './PlayPatch';
 
-const ChannelRack = ({ visible, onClose }) => {
-    const [channels, setChannels] = useState([]);
-    const [tempo, setTempo] = useState(120);
+const ChannelRack = () => {
+    const {
+        channels,
+        tempo,
+        setTempo,
+        addChannel,
+        removeChannel,
+        toggleStep,
+        isVisible,
+        toggleVisibility,
+        updateChannelLabel
+    } = useChannelRack();
 
-    // Load saved state from localStorage when component mounts
+    const stepIndexRef = useRef(0);
+    const loopRef = useRef(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [currentStep, setCurrentStep] = useState(-1);
+
+    const playSequence = async () => {
+        await Tone.start();
+        const transport = Tone.getTransport();
+
+        if (loopRef.current) {
+            transport.stop();
+            loopRef.current.dispose();
+            loopRef.current = null;
+            stepIndexRef.current = 0;
+            setIsPlaying(false);
+            setCurrentStep(-1);
+            return;
+        }
+
+        loopRef.current = new Tone.Loop((time) => {
+            const step = stepIndexRef.current;
+            setCurrentStep(step);
+
+            channels.forEach(channel => {
+                if (channel.steps[step] && channel.patch) {
+                    PlayPatch(channel.patch, time);
+                }
+            });
+
+            stepIndexRef.current = (step + 1) % 16;
+        }, '16n');
+
+        transport.bpm.value = tempo;
+        transport.start();
+        loopRef.current.start(0);
+        setIsPlaying(true);
+    };
+
     useEffect(() => {
-        const savedChannels = JSON.parse(localStorage.getItem('channelRackChannels')) || [];
-        const savedTempo = parseInt(localStorage.getItem('channelRackTempo')) || 120;
-        setChannels(savedChannels);
-        setTempo(savedTempo);
+        return () => {
+            if (loopRef.current) {
+                loopRef.current.dispose();
+                loopRef.current = null;
+            }
+            Tone.getTransport().stop();
+        };
     }, []);
 
-    // Save state to localStorage when channels or tempo change
-    useEffect(() => {
-        localStorage.setItem('channelRackChannels', JSON.stringify(channels));
-        localStorage.setItem('channelRackTempo', tempo.toString());
-    }, [channels, tempo]);
-
-    const addChannel = () => {
-        const newChannel = { id: Date.now(), patchId: null }; // Later you could add patch selection
-        setChannels([...channels, newChannel]);
-    };
-
-    const removeChannel = (id) => {
-        setChannels(channels.filter(channel => channel.id !== id));
-    };
-
-    if (!visible) return null;
+    if (!isVisible) return null;
 
     return (
         <div style={{
             position: 'fixed',
-            top: '20%',
+            bottom: '20px',
             right: '20px',
-            width: '300px',
-            background: 'white',
-            border: '1px solid black',
+            width: '420px',
+            maxHeight: '70vh',
+            overflowY: 'auto',
+            background: '#fff',
+            border: '1px solid #aaa',
             padding: '10px',
             boxShadow: '0 0 10px rgba(0,0,0,0.5)',
-            zIndex: 1000
+            zIndex: 1000,
+            borderRadius: '8px'
         }}>
-            <h3>Channel Rack</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3>Channel Rack</h3>
+                <button onClick={toggleVisibility}>Close</button>
+            </div>
 
             <div style={{ marginBottom: '10px' }}>
                 <label>Tempo: {tempo} BPM</label>
@@ -55,22 +98,66 @@ const ChannelRack = ({ visible, onClose }) => {
                 />
             </div>
 
-            <ul>
-                {channels.map(channel => (
-                    <li key={channel.id} style={{ marginBottom: '5px' }}>
-                        Channel {channel.id}
-                        <button
-                            onClick={() => removeChannel(channel.id)}
-                            style={{ marginLeft: '10px' }}
-                        >
-                            Remove
-                        </button>
-                    </li>
-                ))}
-            </ul>
+            <button onClick={playSequence} style={{ marginBottom: '10px' }}>
+                {isPlaying ? 'Stop' : 'Play'}
+            </button>
+
+            {channels.map(channel => (
+                <div key={channel.id} style={{ marginBottom: '15px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        {channel.patch ? (
+                            <input
+                                type="text"
+                                value={channel.patch.displayName || ''}
+                                onChange={(e) => updateChannelLabel(channel.id, e.target.value)}
+                                placeholder="Patch name"
+                                style={{ width: '150px', marginRight: '10px' }}
+                                title={channel.patch.name || 'Original patch name'}
+                            />
+                        ) : (
+                            <strong>{channel.name}</strong>
+                        )}
+                        <button onClick={() => removeChannel(channel.id)}>Remove</button>
+                    </div>
+
+                    <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(16, 1fr)',
+                        gap: '4px',
+                        marginTop: '8px'
+                    }}>
+                        {channel.steps.map((active, index) => (
+                            <div
+                                key={index}
+                                onClick={() => toggleStep(channel.id, index)}
+                                style={{
+                                    width: '100%',
+                                    paddingTop: '100%',
+                                    position: 'relative',
+                                    backgroundColor:
+                                        currentStep === index
+                                            ? '#ffa500'
+                                            : active
+                                            ? '#4caf50'
+                                            : '#ddd',
+                                    cursor: 'pointer',
+                                    borderRadius: '4px'
+                                }}
+                            >
+                                <div style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0
+                                }} />
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            ))}
 
             <button onClick={addChannel}>Add Channel</button>
-            <button onClick={onClose} style={{ marginLeft: '10px' }}>Close</button>
         </div>
     );
 };

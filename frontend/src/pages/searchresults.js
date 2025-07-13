@@ -24,7 +24,7 @@ const SearchResults = () => {
                 <ul>
                     {results.map(user => (
                         <li key={user.id}>
-                            <Link to={`/profile/${user.id}`}>{user.username}</Link>
+                            <Link to={`/profile/${user.username}`}>{user.username}</Link>
                         </li>
                     ))}
                 </ul>

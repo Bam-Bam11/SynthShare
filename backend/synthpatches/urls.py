@@ -9,6 +9,8 @@ from .views import (
     feed_view,
     get_user_by_username,
     current_user_view,
+    post_patch,
+    unpost_patch,
 )
 
 router = DefaultRouter()
@@ -22,6 +24,8 @@ urlpatterns = [
     path('users/me/', current_user_view),
     path('users/username/<str:username>/', get_user_by_username),
     path('feed/', feed_view),
+    path('patches/<int:pk>/post/', post_patch),
+    path('patches/<int:pk>/unpost/', unpost_patch),
     path('', include(router.urls)),
 ]
 

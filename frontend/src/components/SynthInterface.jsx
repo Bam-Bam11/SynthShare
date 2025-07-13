@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as Tone from 'tone';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
+
+//remember to import save from utils
 
 const noteOptions = [
     'C2', 'D2', 'E2', 'F2', 'G2', 'A2', 'B2',
@@ -13,6 +16,7 @@ const durationOptions = ['1n', '2n', '4n', '8n', '16n', '32n'];
 
 const SynthInterface = () => {
     const canvasRef = useRef(null);
+    const navigate = useNavigate();
 
     // Tone.js & Synth State
     const [synth, setSynth] = useState(null);
@@ -29,10 +33,10 @@ const SynthInterface = () => {
     const [release, setRelease] = useState(0.5);
     const [detune, setDetune] = useState(0);
     const [resonance, setResonance] = useState(1);
-    const [filterType, setFilterType] = useState('none');  // Default to no filter
-    const [cutoff, setCutoff] = useState(1000);            // Used for lowpass/highpass cutoff
-    const [bandLow, setBandLow] = useState(300);           // Used for bandpass lower freq
-    const [bandHigh, setBandHigh] = useState(3000);        // Used for bandpass upper freq
+    const [filterType, setFilterType] = useState('none');
+    const [cutoff, setCutoff] = useState(1000);
+    const [bandLow, setBandLow] = useState(300);
+    const [bandHigh, setBandHigh] = useState(3000);
     const [portamento, setPortamento] = useState(0);
     const [noiseLevel, setNoiseLevel] = useState(0);
     const [note, setNote] = useState('C4');
@@ -40,100 +44,149 @@ const SynthInterface = () => {
 
     // Patch Save State
     const [savedPatch, setSavedPatch] = useState(null);
+    const [action, setAction] = useState(null);
+    const [stemId, setStemId] = useState(null);
+    const [rootId, setRootId] = useState(null);
+    const [immediatePredecessorId, setImmediatePredecessorId] = useState(null);
 
-useEffect(() => {
-    let filter = null;
+    useEffect(() => {
+    const patchToLoad = localStorage.getItem('patchToLoad');
+    //console.log('patchToLoad full object:', patch);
+    if (patchToLoad) {
+        try {
+            const patch = JSON.parse(patchToLoad);
+            console.log('Loaded parameters:', patch.parameters);
 
-    if (filterType !== 'none') {
-        if (filterType === 'lowpass' || filterType === 'highpass') {
-            filter = new Tone.Filter({
-                type: filterType,
-                frequency: cutoff,
-                Q: resonance,
-            });
-        } else if (filterType === 'bandpass') {
-            const centerFreq = (bandLow + bandHigh) / 2;
-            const bandwidth = bandHigh - bandLow;
-            filter = new Tone.Filter({
-                type: 'bandpass',
-                frequency: centerFreq,
-                Q: centerFreq / bandwidth,
-            });
+            const params = patch.parameters || {};
+
+            // Top-level
+            setPatchName(patch.name || '');
+            setDescription(patch.description || '');
+            setOscType(params.oscillator || 'sine');
+            setDetune(params.detune ?? 0);
+            setPortamento(params.portamento ?? 0);
+            setNoiseLevel(params.noiseLevel ?? 0);
+            setNote(patch.note || 'C4');
+            setDuration(patch.duration || '8n');
+            setAction(patch.action || null);
+            setStemId(patch.stem || patch.id || null);
+            setRootId(patch.root || patch.id || null);
+            setImmediatePredecessorId(patch.id || null);
+
+
+            // Envelope
+            setAttack(params.envelope?.attack ?? 0.1);
+            setDecay(params.envelope?.decay ?? 0.2);
+            setSustain(params.envelope?.sustain ?? 0.7);
+            setRelease(params.envelope?.release ?? 0.5);
+
+            // Filter
+            setFilterType(params.filter?.type || 'none');
+            setResonance(params.filter?.resonance ?? 1);
+            setCutoff(params.filter?.cutoff ?? 1000);
+            setBandLow(params.filter?.bandLow ?? 300);
+            setBandHigh(params.filter?.bandHigh ?? 3000);
+
+            localStorage.removeItem('patchToLoad');
+        } catch (err) {
+            console.error('Failed to load patch from storage:', err);
         }
     }
+}, []);
 
-    const analyser = new Tone.Analyser('fft', 128);
+    useEffect(() => {
+        let filter = null;
 
-    const newSynth = new Tone.Synth({
-        oscillator: { type: oscType, detune: detune },
-        envelope: { attack, decay, sustain, release },
-        portamento: portamento,
-    });
-
-    const newNoise = new Tone.Noise({ type: 'white' });
-    newNoise.volume.value = noiseLevel;
-
-    if (filter) {
-        newSynth.connect(filter);
-        newNoise.connect(filter);
-        filter.connect(analyser);
-    } else {
-        newSynth.connect(analyser);
-        newNoise.connect(analyser);
-    }
-
-    analyser.toDestination();
-
-    setSynth(newSynth);
-    setNoise(newNoise);
-    setAnalyser(analyser);
-
-    return () => {
-        newSynth.dispose();
-        newNoise.dispose();
-        analyser.dispose();
-        if (filter) filter.dispose();
-    };
-}, [
-    oscType, attack, decay, sustain, release, detune,
-    resonance, filterType, cutoff, bandLow, bandHigh,
-    portamento, noiseLevel
-]);
-
-useEffect(() => {
-    if (!analyser || !canvasRef.current) return;
-
-    const canvas = canvasRef.current;
-    const canvasCtx = canvas.getContext('2d');
-    let animationId;
-
-    const draw = () => {
-        const buffer = analyser.getValue();
-        canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-        canvasCtx.beginPath();
-
-        const sliceWidth = canvas.width / buffer.length;
-        buffer.forEach((val, i) => {
-            const x = i * sliceWidth;
-            const y = (1 - (val + 140) / 140) * canvas.height;
-            if (i === 0) {
-                canvasCtx.moveTo(x, y);
-            } else {
-                canvasCtx.lineTo(x, y);
+        if (filterType !== 'none') {
+            if (filterType === 'lowpass' || filterType === 'highpass') {
+                filter = new Tone.Filter({
+                    type: filterType,
+                    frequency: cutoff,
+                    Q: resonance,
+                });
+            } else if (filterType === 'bandpass') {
+                const centerFreq = (bandLow + bandHigh) / 2;
+                const bandwidth = bandHigh - bandLow;
+                filter = new Tone.Filter({
+                    type: 'bandpass',
+                    frequency: centerFreq,
+                    Q: centerFreq / bandwidth,
+                });
             }
+        }
+
+        const analyser = new Tone.Analyser('fft', 128);
+
+        const newSynth = new Tone.Synth({
+            oscillator: { type: oscType, detune: detune },
+            envelope: { attack, decay, sustain, release },
+            portamento: portamento,
         });
 
-        canvasCtx.strokeStyle = 'blue';
-        canvasCtx.lineWidth = 2;
-        canvasCtx.stroke();
+        const newNoise = new Tone.Noise({ type: 'white' });
+        newNoise.volume.value = noiseLevel;
 
-        animationId = requestAnimationFrame(draw);
-    };
+        if (filter) {
+            newSynth.connect(filter);
+            newNoise.connect(filter);
+            filter.connect(analyser);
+        } else {
+            newSynth.connect(analyser);
+            newNoise.connect(analyser);
+        }
 
-    draw();
+        analyser.toDestination();
 
-    return () => cancelAnimationFrame(animationId);
-}, [analyser]);
+        setSynth(newSynth);
+        setNoise(newNoise);
+        setAnalyser(analyser);
+
+        return () => {
+            newSynth.dispose();
+            newNoise.dispose();
+            analyser.dispose();
+            if (filter) filter.dispose();
+        };
+    }, [
+        oscType, attack, decay, sustain, release, detune,
+        resonance, filterType, cutoff, bandLow, bandHigh,
+        portamento, noiseLevel
+    ]);
+
+    useEffect(() => {
+        if (!analyser || !canvasRef.current) return;
+
+        const canvas = canvasRef.current;
+        const canvasCtx = canvas.getContext('2d');
+        let animationId;
+
+        const draw = () => {
+            const buffer = analyser.getValue();
+            canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+            canvasCtx.beginPath();
+
+            const sliceWidth = canvas.width / buffer.length;
+            buffer.forEach((val, i) => {
+                const x = i * sliceWidth;
+                const y = (1 - (val + 140) / 140) * canvas.height;
+                if (i === 0) {
+                    canvasCtx.moveTo(x, y);
+                } else {
+                    canvasCtx.lineTo(x, y);
+                }
+            });
+
+            canvasCtx.strokeStyle = 'blue';
+            canvasCtx.lineWidth = 2;
+            canvasCtx.stroke();
+
+            animationId = requestAnimationFrame(draw);
+        };
+
+        draw();
+
+        return () => cancelAnimationFrame(animationId);
+    }, [analyser]);
 
     const playNote = () => {
         Tone.start();
@@ -145,16 +198,17 @@ useEffect(() => {
         }
     };
 
- const handleSavePatch = () => {
+ const handleSavePatch = async () => {
+    const token = localStorage.getItem('access_token');
+    const name = patchName.trim() || 'Untitled Patch';
+    const desc = description.trim().slice(0, 500);  // Max 500 chars
+
     const patch = {
+        patchName,
+        description,
         oscillator: oscType,
         detune,
-        envelope: {
-            attack,
-            decay,
-            sustain,
-            release,
-        },
+        envelope: { attack, decay, sustain, release },
         filter: {
             type: filterType,
             resonance,
@@ -166,46 +220,69 @@ useEffect(() => {
         note,
         duration,
     };
-    setSavedPatch(patch);
-    console.log('Saved patch:', patch);
-};
-
-const handlePostPatch = async () => {
-    if (!savedPatch) {
-        alert('Please save the patch first.');
-        return;
-    }
-
-    const token = localStorage.getItem('access_token');
-    const name = patchName.trim() || 'Untitled Patch';
-    const desc = description.trim().slice(0, 500);  // Max 500 chars
 
     const payload = {
         name,
         description: desc,
-        parameters: savedPatch,
+        parameters: patch,
         synth_type: 'basic',
         note,
         duration,
+        is_posted: false,
+        ...(stemId && { stem: stemId }),
+        ...(rootId && { root: rootId }),
+        ...(immediatePredecessorId && { immediate_predecessor: immediatePredecessorId }),
+    
     };
+    console.log('Payload being sent to backend:', payload);
 
-    console.log('Payload being sent:', payload);
 
     try {
-        const response = await axios.post('http://localhost:8000/api/patches/', payload, {
+        const res = await axios.post('http://localhost:8000/api/patches/', payload, {
             headers: {
                 Authorization: `Bearer ${token}`,
                 'Content-Type': 'application/json',
             },
         });
 
-        alert('Patch successfully saved to backend!');
-        console.log('Backend response:', response.data);
-    } catch (error) {
-        console.error('Error posting patch:', error);
-        alert('Error saving patch');
+        setSavedPatch({ ...patch, backendId: res.data.id }); // store ID for later post
+        alert('Patch saved successfully!');
+        console.log('Saved patch response:', res.data);
+    } catch (err) {
+        console.error('Error saving patch:', err);
+        alert('Failed to save patch.');
     }
 };
+
+
+const handlePostPatch = async () => {
+    if (!savedPatch?.backendId) {
+        alert('Please save the patch first.');
+        return;
+    }
+
+    const token = localStorage.getItem('access_token');
+
+    try {
+        const response = await axios.post(
+            `http://localhost:8000/api/patches/${savedPatch.backendId}/post/`,
+            {},
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+            }
+        );
+
+        alert('Patch has been posted and is now public!');
+        console.log('Post patch response:', response.data);
+    } catch (error) {
+        console.error('Error posting patch:', error);
+        alert('Error posting patch');
+    }
+};
+
 
 
     const handleDownloadPatch = () => {

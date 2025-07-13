@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import API from '../api';
 import PlayPatch from '../components/PlayPatch';
 import { Link } from 'react-router-dom';
+import { useChannelRack } from '../context/ChannelRackContext';
+
 
 const FeedPage = () => {
     const [patches, setPatches] = useState([]);
@@ -24,6 +26,9 @@ const FeedPage = () => {
 
         fetchFeed();
     }, []);
+
+    const { assignPatchToFirstEmptyChannel } = useChannelRack();
+
 
     return (
         <div style={{ padding: '20px' }}>
@@ -59,6 +64,11 @@ const FeedPage = () => {
                             >
                                 Play
                             </button>
+
+                            <button onClick={() => assignPatchToFirstEmptyChannel(patch)}>
+                                Add to Rack
+                            </button>
+
                         </li>
                     ))}
                 </ul>

@@ -1,7 +1,9 @@
 from rest_framework import viewsets, permissions, filters
+from rest_framework.generics import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from django.contrib.auth.models import User
+from rest_framework.exceptions import PermissionDenied
 from .models import Patch, Follow
 from .serializers import PatchSerializer, UserSerializer, FollowSerializer
 
@@ -11,18 +13,55 @@ class PatchViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        queryset = Patch.objects.all().order_by('-created_at')
+        user = self.request.user
         uploaded_by = self.request.query_params.get('uploaded_by')
-        parent_id = self.request.query_params.get('parent')
+
+        queryset = Patch.objects.all().order_by('-created_at')
+
         if uploaded_by:
-            queryset = queryset.filter(uploaded_by__id=uploaded_by)
-        if parent_id:
-            queryset = queryset.filter(parent__id=parent_id)
+            if str(user.id) == uploaded_by:
+                queryset = queryset.filter(uploaded_by__id=uploaded_by)
+            else:
+                queryset = queryset.filter(uploaded_by__id=uploaded_by, is_posted=True)
+        else:
+            queryset = queryset.filter(is_posted=True)
+
         return queryset
 
     def perform_create(self, serializer):
-        serializer.save(uploaded_by=self.request.user)
+       patch = serializer.save(uploaded_by=self.request.user)
+       patch.save() 
 
+    def get_object(self):
+        queryset = Patch.objects.all()
+        patch = get_object_or_404(queryset, pk=self.kwargs['pk'])
+
+        if patch.uploaded_by != self.request.user and not patch.is_posted:
+            raise PermissionDenied("This patch is not publicly available.")
+
+        return patch
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def post_patch(request, pk):
+    try:
+        patch = Patch.objects.get(pk=pk, uploaded_by=request.user)
+        patch.is_posted = True
+        patch.save()
+        return Response({'success': 'Patch has been posted.'})
+    except Patch.DoesNotExist:
+        return Response({'error': 'Patch not found or not owned by user.'}, status=404)
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def unpost_patch(request, pk):
+    try:
+        patch = Patch.objects.get(pk=pk, uploaded_by=request.user)
+        patch.is_posted = False
+        patch.save()
+        return Response({'success': 'Patch has been unposted.'})
+    except Patch.DoesNotExist:
+        return Response({'error': 'Patch not found or not owned by user.'}, status=404)
 
 # USER VIEWSET — for search by username
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
@@ -110,3 +149,4 @@ def feed_view(request):
     recent_patches = Patch.objects.filter(uploaded_by__in=followed_users).order_by('-created_at')
     serializer = PatchSerializer(recent_patches, many=True)
     return Response(serializer.data)
+

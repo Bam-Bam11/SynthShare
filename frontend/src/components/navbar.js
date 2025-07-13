@@ -1,25 +1,18 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ChannelRack from './ChannelRack';
+import { useChannelRack } from '../context/ChannelRackContext';
 
 const Navbar = () => {
     const [query, setQuery] = useState('');
-    const [channelRackVisible, setChannelRackVisible] = useState(
-        localStorage.getItem('channelRackVisible') === 'true'
-    );
     const navigate = useNavigate();
+    const { isVisible, toggleVisibility } = useChannelRack(); 
 
     const handleSearch = (e) => {
         e.preventDefault();
         if (query.trim()) {
             navigate(`/search?query=${encodeURIComponent(query.trim())}`);
         }
-    };
-
-    const toggleChannelRack = () => {
-        const newState = !channelRackVisible;
-        setChannelRackVisible(newState);
-        localStorage.setItem('channelRackVisible', newState.toString());
     };
 
     return (
@@ -40,13 +33,13 @@ const Navbar = () => {
                     <a href="/profile" style={{ marginRight: '10px' }}>Profile</a>
                     <a href="/feed" style={{ marginRight: '10px' }}>Feed</a>
                     <a href="/build" style={{ marginRight: '10px' }}>Build</a>
-                    <button onClick={toggleChannelRack}>
-                        {channelRackVisible ? 'Hide Rack' : 'Show Rack'}
+                    <button onClick={toggleVisibility}>
+                        {isVisible ? 'Hide Rack' : 'Show Rack'}
                     </button>
                 </div>
             </nav>
 
-            <ChannelRack visible={channelRackVisible} onClose={() => toggleChannelRack()} />
+            <ChannelRack />
         </>
     );
 };

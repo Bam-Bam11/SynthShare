@@ -4,7 +4,10 @@ from django.contrib.auth.models import User
 
 class PatchSerializer(serializers.ModelSerializer):
     uploaded_by = serializers.ReadOnlyField(source='uploaded_by.username')
-    parent = serializers.PrimaryKeyRelatedField(queryset=Patch.objects.all(), required=False, allow_null=True)
+    uploaded_by_id = serializers.ReadOnlyField(source='uploaded_by.id')
+    root = serializers.PrimaryKeyRelatedField(queryset=Patch.objects.all(), required=False, allow_null=True)
+    stem = serializers.PrimaryKeyRelatedField(queryset=Patch.objects.all(), required=False, allow_null=True)
+    immediate_predecessor = serializers.PrimaryKeyRelatedField(queryset=Patch.objects.all(), required=False, allow_null=True)
 
     class Meta:
         model = Patch
@@ -13,6 +16,7 @@ class PatchSerializer(serializers.ModelSerializer):
             'name',
             'description',
             'uploaded_by',
+            'uploaded_by_id',
             'parameters',
             'synth_type',
             'note',
@@ -20,8 +24,19 @@ class PatchSerializer(serializers.ModelSerializer):
             'created_at',
             'downloads',
             'forks',
-            'parent',
+            'root',
+            'stem',
+            'immediate_predecessor',
+            'version',
+            'is_posted',
         ]
+        read_only_fields = ['uploaded_by', 'downloads', 'forks', 'created_at']
+
+    def create(self, validated_data):
+        patch = Patch(**validated_data)  # Do not pass uploaded_by here
+        patch.save()
+        return patch
+
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:

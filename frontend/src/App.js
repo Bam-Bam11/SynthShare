@@ -4,10 +4,10 @@ import {
     Routes,
     Route,
     Navigate,
-    Link,
     useNavigate,
     useLocation
 } from 'react-router-dom';
+
 import API from './api';
 import LoginForm from './LoginForm';
 import SynthInterface from './components/SynthInterface';
@@ -16,8 +16,9 @@ import SearchResults from './pages/searchresults';
 import UserProfile from './pages/userprofile';
 import FeedPage from './pages/FeedPage';
 import PatchDetail from './pages/patchdetail';
+import { ChannelRackProvider } from './context/ChannelRackContext';
 
-function App() {
+function InnerApp() {
     const [token, setToken] = useState(localStorage.getItem('access_token') || '');
     const [username, setUsername] = useState('');
     const [formData, setFormData] = useState({ username: '', email: '', password: '' });
@@ -117,10 +118,13 @@ function App() {
     );
 }
 
-export default function WrappedApp() {
+// One and only App entry point
+export default function App() {
     return (
         <Router>
-            <App />
+            <ChannelRackProvider>
+                <InnerApp />
+            </ChannelRackProvider>
         </Router>
     );
 }
