@@ -4,6 +4,7 @@ import API from '../api';
 import PlayPatch from '../components/PlayPatch';
 import { useChannelRack } from '../context/ChannelRackContext';
 import { jwtDecode } from 'jwt-decode';
+import PatchLineageGraph from '../components/PatchLineageGraph';
 
 const PatchDetail = () => {
     const { id } = useParams();
@@ -61,31 +62,37 @@ const PatchDetail = () => {
     if (!patch) return <p>Loading patch details...</p>;
 
     return (
-        <div style={{ padding: '20px' }}>
-            <h2>{patch.name}</h2>
-            <p><strong>Description:</strong> {patch.description || 'No description provided.'}</p>
-            <p><strong>Uploaded by:</strong> {patch.uploaded_by}</p>
-            <p><strong>Created at:</strong> {new Date(patch.created_at).toLocaleString()}</p>
-            <p><strong>Downloads:</strong> {patch.downloads}</p>
-            <p><strong>Forks:</strong> {patch.forks}</p>
-            <p><strong>Version:</strong> {patch.version}</p>
+    <div style={{ padding: '20px' }}>
+        <h2>{patch.name}</h2>
+        <p><strong>Description:</strong> {patch.description || 'No description provided.'}</p>
+        <p><strong>Uploaded by:</strong> {patch.uploaded_by}</p>
+        <p><strong>Created at:</strong> {new Date(patch.created_at).toLocaleString()}</p>
+        <p><strong>Downloads:</strong> {patch.downloads}</p>
+        <p><strong>Forks:</strong> {patch.forks}</p>
+        <p><strong>Version:</strong> {patch.version}</p>
 
-            <h3>Parameters:</h3>
-            <pre style={{ background: '#f9f9f9', color: '#333', padding: '10px', borderRadius: '5px' }}>
-                {JSON.stringify(patch.parameters, null, 2)}
-            </pre>
+        <h3>Parameters:</h3>
+        <pre style={{ background: '#f9f9f9', color: '#333', padding: '10px', borderRadius: '5px' }}>
+            {JSON.stringify(patch.parameters, null, 2)}
+        </pre>
 
-            <button onClick={() => PlayPatch(patch)} style={{ marginRight: '10px' }}>Play Patch</button>
-            <button onClick={() => assignPatchToFirstEmptyChannel(patch)} style={{ marginRight: '10px' }}>
-                Add to Rack
+        <button onClick={() => PlayPatch(patch)} style={{ marginRight: '10px' }}>Play Patch</button>
+        <button onClick={() => assignPatchToFirstEmptyChannel(patch)} style={{ marginRight: '10px' }}>
+            Add to Rack
+        </button>
+        {currentUserId && (
+            <button onClick={handleEditOrFork}>
+                {currentUserId === patch.uploaded_by_id ? 'Edit Patch' : 'Fork Patch'}
             </button>
-            {currentUserId && (
-                <button onClick={handleEditOrFork}>
-                    {currentUserId === patch.uploaded_by_id ? 'Edit Patch' : 'Fork Patch'}
-                </button>
-            )}
-        </div>
-    );
+        )}
+        {patch && (
+            <div style={{ marginTop: '30px' }}>
+                <h3>Version Tree</h3>
+                <PatchLineageGraph patchId={patch.id} />
+            </div>
+        )}
+    </div>
+);
 };
 
 export default PatchDetail;

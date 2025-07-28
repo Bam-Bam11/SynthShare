@@ -9,8 +9,8 @@ import { postPatch, savePatch, deletePatch, unpostPatch, downloadPatch } from '.
 const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
     const { username } = useParams();
     const [user, setUser] = useState(null);
-    const [patches, setPatches] = useState([]);
-    const [savedPatches, setSavedPatches] = useState([]);
+    const [patches, setPatches] = useState([]);          // posted only
+    const [savedPatches, setSavedPatches] = useState([]); // all created patches
     const [isFollowing, setIsFollowing] = useState(false);
     const [currentUserId, setCurrentUserId] = useState(null);
     const [isSelfProfile, setIsSelfProfile] = useState(propIsSelfProfile);
@@ -36,12 +36,12 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
         try {
             const decoded = jwtDecode(token);
             setCurrentUserId(decoded.user_id);
-            console.log("Param 'username':", username);
-            console.log("Decoded token username:", decoded.username);
+            console.log("Param 'username':", username); //debug
+            console.log("Decoded token username:", decoded.username); //debug
 
             const targetUsername = username || decoded.username;
 
-            API.get(`/users/${targetUsername}/`)
+            API.get(`/users/username/${targetUsername}/`)
                 .then(res => {
                     setUser(res.data);
                     const targetId = res.data.id;
@@ -108,98 +108,100 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
     };
 
     const handleUnpostPatch = async (patchId) => {
-        try {
-            await unpostPatch(patchId);
-            setPatches(prev => prev.filter(p => p.id !== patchId));
-            setSavedPatches(prev =>
-                prev.map(p => p.id === patchId ? { ...p, is_posted: false } : p)
-            );
-        } catch (err) {
-            console.error('Failed to unpost patch:', err);
-        }
-    };
+    try {
+        await unpostPatch(patchId);
+        setPatches(prev => prev.filter(p => p.id !== patchId));
+        setSavedPatches(prev =>
+            prev.map(p => p.id === patchId ? { ...p, is_posted: false } : p)
+        );
+    } catch (err) {
+        console.error('Failed to unpost patch:', err);
+    }
+};
 
-    const handleDeletePatch = async (patchId) => {
-        try {
-            await deletePatch(patchId);
-            setSavedPatches(prev => prev.filter(p => p.id !== patchId));
-            setPatches(prev => prev.filter(p => p.id !== patchId));
-        } catch (err) {
-            console.error('Failed to delete patch:', err);
-        }
-    };
+const handleDeletePatch = async (patchId) => {
+    try {
+        await deletePatch(patchId);
+        setSavedPatches(prev => prev.filter(p => p.id !== patchId));
+        setPatches(prev => prev.filter(p => p.id !== patchId));
+    } catch (err) {
+        console.error('Failed to delete patch:', err);
+    }
+};
+
 
     if (!user) return <p>Loading user...</p>;
 
-    return (
-        <div style={{ padding: '20px' }}>
-            <h2>Profile: {user.username}</h2>
-            <p>User ID: {user.id}</p>
+return (
+    <div style={{ padding: '20px' }}>
+        <h2>Profile: {user.username}</h2>
+        <p>User ID: {user.id}</p>
 
-            {!isSelfProfile && (
-                isFollowing ? (
-                    <button onClick={handleUnfollow}>Unfollow</button>
-                ) : (
-                    <button onClick={handleFollow}>Follow</button>
-                )
-            )}
-
-            <h3>Posted Patches</h3>
-            {patches.length > 0 ? (
-                <ul>
-                    {patches.map(patch => (
-                        <li key={patch.id}>
-                            <strong>
-                                <Link to={`/patches/${patch.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
-                                    {patch.name}
-                                </Link>
-                            </strong>{' '}
-                            ({new Date(patch.created_at).toLocaleString()})
-                            <button style={{ marginLeft: '10px' }} onClick={() => PlayPatch(patch)}>Play</button>
-                            <button style={{ marginLeft: '10px' }} onClick={() => assignPatchToFirstEmptyChannel(patch)}>Add to Rack</button>
-                            {isSelfProfile && (
-                                <>
-                                    <button style={{ marginLeft: '10px' }} onClick={() => handleUnpostPatch(patch.id)}>Unpost</button>
-                                    <button style={{ marginLeft: '10px' }} onClick={() => handleDeletePatch(patch.id)}>Delete</button>
-                                </>
-                            )}
-                        </li>
-                    ))}
-                </ul>
+        {!isSelfProfile && (
+            isFollowing ? (
+                <button onClick={handleUnfollow}>Unfollow</button>
             ) : (
-                <p>This user has not posted any patches yet.</p>
-            )}
+                <button onClick={handleFollow}>Follow</button>
+            )
+        )}
 
-            {isSelfProfile && (
-                <>
-                    <h3>Saved Patches (All Created)</h3>
-                    {savedPatches.length > 0 ? (
-                        <ul>
-                            {savedPatches.map(patch => (
-                                <li key={patch.id}>
-                                    <strong>
-                                        <Link to={`/patches/${patch.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
-                                            {patch.name}
-                                        </Link>
-                                    </strong>{' '}
-                                    ({new Date(patch.created_at).toLocaleString()})
-                                    <button style={{ marginLeft: '10px' }} onClick={() => PlayPatch(patch)}>Play</button>
-                                    <button style={{ marginLeft: '10px' }} onClick={() => assignPatchToFirstEmptyChannel(patch)}>Add to Rack</button>
-                                    {!patch.is_posted && (
-                                        <button style={{ marginLeft: '10px' }} onClick={() => handlePostPatch(patch.id)}>Post</button>
-                                    )}
-                                    <button style={{ marginLeft: '10px' }} onClick={() => handleDeletePatch(patch.id)}>Delete</button>
-                                </li>
-                            ))}
-                        </ul>
-                    ) : (
-                        <p>You have not created any patches yet.</p>
-                    )}
-                </>
-            )}
+        <h3>Posted Patches</h3>
+        {patches.length > 0 ? (
+            <ul>
+                {patches.map(patch => (
+                    <li key={patch.id}>
+                        <strong>
+                            <Link to={`/patches/${patch.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
+                                {patch.name}
+                            </Link>
+                        </strong>{' '}
+                        ({new Date(patch.created_at).toLocaleString()})
+                        <button style={{ marginLeft: '10px' }} onClick={() => PlayPatch(patch)}>Play</button>
+                        <button style={{ marginLeft: '10px' }} onClick={() => assignPatchToFirstEmptyChannel(patch)}>Add to Rack</button>
+                        {isSelfProfile && (
+                            <>
+                                <button style={{ marginLeft: '10px' }} onClick={() => handleUnpostPatch(patch.id)}>Unpost</button>
+                                <button style={{ marginLeft: '10px' }} onClick={() => handleDeletePatch(patch.id)}>Delete</button>
+                            </>
+                        )}
+                    </li>
+                ))}
+            </ul>
+        ) : (
+            <p>This user has not posted any patches yet.</p>
+        )}
 
-        </div>
-    );
+        {isSelfProfile && (
+            <>
+                <h3>Saved Patches (All Created)</h3>
+                {savedPatches.length > 0 ? (
+                    <ul>
+                        {savedPatches.map(patch => (
+                            <li key={patch.id}>
+                                <strong>
+                                    <Link to={`/patches/${patch.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
+                                        {patch.name}
+                                    </Link>
+                                </strong>{' '}
+                                ({new Date(patch.created_at).toLocaleString()})
+                                <button style={{ marginLeft: '10px' }} onClick={() => PlayPatch(patch)}>Play</button>
+                                <button style={{ marginLeft: '10px' }} onClick={() => assignPatchToFirstEmptyChannel(patch)}>Add to Rack</button>
+                                {!patch.is_posted && (
+                                    <button style={{ marginLeft: '10px' }} onClick={() => handlePostPatch(patch.id)}>Post</button>
+                                )}
+                                <button style={{ marginLeft: '10px' }} onClick={() => handleDeletePatch(patch.id)}>Delete</button>
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p>You have not created any patches yet.</p>
+                )}
+            </>
+        )}
+
+    </div>
+);
+
 };
 
 export default UserProfile;

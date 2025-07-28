@@ -3,8 +3,6 @@ import * as Tone from 'tone';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 
-//remember to import save from utils
-
 const noteOptions = [
     'C2', 'D2', 'E2', 'F2', 'G2', 'A2', 'B2',
     'C3', 'D3', 'E3', 'F3', 'G3', 'A3', 'B3',
@@ -14,7 +12,7 @@ const noteOptions = [
 
 const durationOptions = ['1n', '2n', '4n', '8n', '16n', '32n'];
 
-const SynthInterface = () => {
+const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescription = false }) => {
     const canvasRef = useRef(null);
     const navigate = useNavigate();
 
@@ -51,7 +49,6 @@ const SynthInterface = () => {
 
     useEffect(() => {
     const patchToLoad = localStorage.getItem('patchToLoad');
-    //console.log('patchToLoad full object:', patch);
     if (patchToLoad) {
         try {
             const patch = JSON.parse(patchToLoad);
@@ -308,10 +305,38 @@ const handlePostPatch = async () => {
         URL.revokeObjectURL(url);
     };
 
-    return (
-        <div className="p-4 max-w-md mx-auto rounded-xl shadow-lg bg-white">
-            <h2 className="text-xl font-bold mb-4">Synth Interface</h2>
+    useEffect(() => {
+    if (onParamsChange) {
+        const current = {
+            oscillator: oscType,
+            detune,
+            portamento,
+            noiseLevel,
+            note,
+            duration,
+            envelope: { attack, decay, sustain, release },
+            filter: {
+                type: filterType,
+                resonance,
+                ...(filterType === 'lowpass' || filterType === 'highpass' ? { cutoff } : {}),
+                ...(filterType === 'bandpass' ? { bandLow, bandHigh } : {})
+            }
+        };
+        onParamsChange(current);
+    }
+}, [
+    oscType, detune, portamento, noiseLevel,
+    attack, decay, sustain, release,
+    filterType, resonance, cutoff, bandLow, bandHigh,
+    note, duration
+]);
 
+
+    return (
+    <div className="p-4 max-w-md mx-auto rounded-xl shadow-lg bg-white">
+        <h2 className="text-xl font-bold mb-4">Synth Interface</h2>
+
+        {!hideNameAndDescription && (
             <div className="mb-4">
                 <label className="block mb-1 font-medium">Patch Name:</label>
                 <input
@@ -322,18 +347,22 @@ const handlePostPatch = async () => {
                     placeholder="Enter patch name"
                 />
             </div>
+        )}
 
-            <div className="mb-4">
-                <label className="block mb-1 font-medium">Description (max 500 chars):</label>
-                <textarea
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    maxLength={500}
-                    className="p-2 border rounded w-full"
-                    placeholder="Describe this patch"
-                    rows={4}
-                />
-            </div>
+            {!hideNameAndDescription && (
+                <div className="mb-4">
+                    <label className="block mb-1 font-medium">Description (max 500 chars):</label>
+                    <textarea
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        maxLength={500}
+                        className="p-2 border rounded w-full"
+                        placeholder="Describe this patch"
+                        rows={4}
+                    />
+                </div>
+            )}
+
 
             <label className="block mb-2">Oscillator Type:</label>
             <select
@@ -466,6 +495,7 @@ const handlePostPatch = async () => {
                 Play Note
             </button>
 
+                {!hideNameAndDescription && (
             <div className="mt-4 space-y-2">
                 <button
                     onClick={handleSavePatch}
@@ -488,6 +518,7 @@ const handlePostPatch = async () => {
                     Download Patch
                 </button>
             </div>
+        )}
 
             <div className="mt-4">
                 <h3>Frequency Visualisation:</h3>

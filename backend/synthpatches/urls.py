@@ -11,6 +11,8 @@ from .views import (
     current_user_view,
     post_patch,
     unpost_patch,
+    random_posted_patch,
+    lineage_view,
 )
 
 router = DefaultRouter()
@@ -26,6 +28,8 @@ urlpatterns = [
     path('feed/', feed_view),
     path('patches/<int:pk>/post/', post_patch),
     path('patches/<int:pk>/unpost/', unpost_patch),
+    path('patches/random/', random_posted_patch),
+    path('patches/<int:pk>/lineage/', lineage_view),
     path('', include(router.urls)),
 ]
 

@@ -17,8 +17,9 @@ import UserProfile from './pages/userprofile';
 import FeedPage from './pages/FeedPage';
 import PatchDetail from './pages/patchdetail';
 import { ChannelRackProvider } from './context/ChannelRackContext';
+import TuneYourEarPage from './pages/TuneYourEarPage';
 
-function InnerApp() {
+function InnerApp({ setUserId }) {
     const [token, setToken] = useState(localStorage.getItem('access_token') || '');
     const [username, setUsername] = useState('');
     const [formData, setFormData] = useState({ username: '', email: '', password: '' });
@@ -32,24 +33,29 @@ function InnerApp() {
                 try {
                     const res = await API.get('/users/me/');
                     setUsername(res.data.username);
+                    setUserId(res.data.id); // Pass userId up to parent
                     if (location.pathname === '/') {
                         navigate(`/profile/${res.data.username}`);
                     }
                 } catch (err) {
                     console.error('Failed to fetch current user:', err);
                     setUsername('');
+                    setUserId(null);
                 }
             } else {
                 setUsername('');
+                setUserId(null);
             }
         };
         fetchCurrentUser();
-    }, [token, location.pathname, navigate]);
+    }, [token, location.pathname, navigate, setUserId]);
 
     const handleLogout = () => {
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
         setToken('');
+        setUsername('');
+        setUserId(null);
         navigate('/');
     };
 
@@ -113,17 +119,20 @@ function InnerApp() {
                 <Route path="/search" element={<SearchResults />} />
                 <Route path="/patches/:id" element={<PatchDetail />} />
                 <Route path="*" element={<Navigate to={`/profile/${username}`} />} />
+                <Route path="/tune" element={<TuneYourEarPage />} />
             </Routes>
         </div>
     );
 }
 
-// One and only App entry point
+// Top-level App entry point
 export default function App() {
+    const [userId, setUserId] = useState(null);
+
     return (
         <Router>
-            <ChannelRackProvider>
-                <InnerApp />
+            <ChannelRackProvider userId={userId}>
+                <InnerApp setUserId={setUserId} />
             </ChannelRackProvider>
         </Router>
     );

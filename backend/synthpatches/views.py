@@ -6,6 +6,7 @@ from django.contrib.auth.models import User
 from rest_framework.exceptions import PermissionDenied
 from .models import Patch, Follow
 from .serializers import PatchSerializer, UserSerializer, FollowSerializer
+import random
 
 # PATCH API VIEWSET
 class PatchViewSet(viewsets.ModelViewSet):
@@ -150,3 +151,94 @@ def feed_view(request):
     serializer = PatchSerializer(recent_patches, many=True)
     return Response(serializer.data)
 
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def random_posted_patch(request):
+    patches = list(Patch.objects.filter(is_posted=True))
+    if not patches:
+        return Response({'error': 'No posted patches available.'}, status=404)
+    patch = random.choice(patches)
+    serializer = PatchSerializer(patch)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def lineage_view(request, pk):
+    try:
+        current_patch = Patch.objects.get(pk=pk)
+    except Patch.DoesNotExist:
+        return Response({'error': 'Patch not found.'}, status=404)
+
+    root = current_patch.root or current_patch
+
+    all_patches = Patch.objects.filter(root=root, is_posted=True).order_by('created_at')
+
+    # Build patch node data
+    node_map = {}
+    for patch in all_patches:
+        node_map[patch.id] = {
+            'id': patch.id,
+            'name': patch.name,
+            'version': patch.version,
+            'downloads': patch.downloads,
+            'is_posted': patch.is_posted,
+            'isCurrent': (patch.id == current_patch.id),
+            'uploaded_by': patch.uploaded_by.username,
+            'stem': patch.stem.id if patch.stem else None,
+            'immediate_predecessor': patch.immediate_predecessor.id if patch.immediate_predecessor else None,
+            'x': 0,
+            'y': 0,
+        }
+
+    # Build edges
+    edges = []
+    for node in node_map.values():
+        if node['immediate_predecessor']:
+            edges.append({'from': node['immediate_predecessor'], 'to': node['id']})
+
+    # Layout logic: vertical edit stack, forks branch right
+    X0 = 100  # root x
+    Y0 = 100  # root y
+    C = 120   # vertical spacing (edits)
+    D = 160   # horizontal spacing (forks)
+
+    column_map = {}  # uploaded_by_id → fork column index
+    column_map[root.uploaded_by.id] = 0  # root user starts in column 0
+
+    node_map[root.id]['x'] = X0
+    node_map[root.id]['y'] = Y0
+
+    fork_depth = {0: 0}  # depth per column
+
+    for patch in all_patches:
+        if patch.id == root.id:
+            continue
+
+        node = node_map[patch.id]
+
+        is_edit = (
+            patch.stem and
+            patch.stem.uploaded_by_id == patch.uploaded_by_id
+        )
+
+        if is_edit:
+            col = column_map[patch.uploaded_by.id]
+        else:
+            if patch.uploaded_by.id not in column_map:
+                col = len(column_map)
+                column_map[patch.uploaded_by.id] = col
+                fork_depth[col] = 0
+            else:
+                col = column_map[patch.uploaded_by.id]
+
+        x = X0 + col * D
+        y = Y0 - (fork_depth[col] + 1) * C
+        fork_depth[col] += 1
+
+        node['x'] = x
+        node['y'] = y
+        
+    return Response({
+        'nodes': list(node_map.values()),
+        'edges': edges,
+    })

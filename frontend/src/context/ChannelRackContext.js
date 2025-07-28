@@ -4,58 +4,66 @@ import { createContext, useContext, useState, useEffect } from 'react';
 export const ChannelRackContext = createContext();
 
 // Provider component
-export const ChannelRackProvider = ({ children }) => {
+export const ChannelRackProvider = ({ userId, children }) => {
     const [channels, setChannels] = useState([]);
     const [tempo, setTempo] = useState(120); // Default BPM
     const [isVisible, setIsVisible] = useState(true); // Default visible
     const [loaded, setLoaded] = useState(false); // Prevent premature localStorage writes
 
-    // Load saved state from localStorage when mounted
+    // Load saved state from localStorage when mounted or userId changes
     useEffect(() => {
-        try {
-            const savedChannelsRaw = localStorage.getItem('channelRackChannels');
-            const savedTempoRaw = localStorage.getItem('channelRackTempo');
-            const savedVisibleRaw = localStorage.getItem('channelRackVisible');
+        if (!userId) return;
 
-            console.log('[Load] Channels:', savedChannelsRaw);
-            console.log('[Load] Tempo:', savedTempoRaw);
-            console.log('[Load] Visible:', savedVisibleRaw);
+        try {
+            const savedChannelsRaw = localStorage.getItem(`channelRackChannels_user_${userId}`);
+            const savedTempoRaw = localStorage.getItem(`channelRackTempo_user_${userId}`);
+            const savedVisibleRaw = localStorage.getItem(`channelRackVisible_user_${userId}`);
+
+            console.log(`[Load] Channels (user ${userId}):`, savedChannelsRaw);
+            console.log(`[Load] Tempo (user ${userId}):`, savedTempoRaw);
+            console.log(`[Load] Visible (user ${userId}):`, savedVisibleRaw);
 
             if (savedChannelsRaw) {
                 setChannels(JSON.parse(savedChannelsRaw));
+            } else {
+                setChannels([]);
             }
 
             if (savedTempoRaw) {
                 const parsedTempo = parseInt(savedTempoRaw);
                 if (!isNaN(parsedTempo)) setTempo(parsedTempo);
+            } else {
+                setTempo(120);
             }
 
             if (savedVisibleRaw) {
                 setIsVisible(savedVisibleRaw === 'true');
+            } else {
+                setIsVisible(true);
             }
 
-            setLoaded(true); // mark load complete
+            setLoaded(true);
         } catch (err) {
             console.error('Failed to load channel rack state from localStorage:', err);
         }
-    }, []);
+    }, [userId]);
 
     // Save to localStorage when state changes (after load)
     useEffect(() => {
-        if (loaded) {
-            console.log('[Save] Channels:', channels);
-            localStorage.setItem('channelRackChannels', JSON.stringify(channels));
-            localStorage.setItem('channelRackTempo', tempo.toString());
+        if (loaded && userId) {
+            console.log(`[Save] Channels (user ${userId}):`, channels);
+            localStorage.setItem(`channelRackChannels_user_${userId}`, JSON.stringify(channels));
+            localStorage.setItem(`channelRackTempo_user_${userId}`, tempo.toString());
         }
-    }, [channels, tempo, loaded]);
+    }, [channels, tempo, loaded, userId]);
 
     // Save visibility to localStorage when it changes (after load)
     useEffect(() => {
-        if (loaded) {
-            console.log('[Save] Visible:', isVisible);
-            localStorage.setItem('channelRackVisible', isVisible.toString());
+        if (loaded && userId) {
+            console.log(`[Save] Visible (user ${userId}):`, isVisible);
+            localStorage.setItem(`channelRackVisible_user_${userId}`, isVisible.toString());
         }
-    }, [isVisible, loaded]);
+    }, [isVisible, loaded, userId]);
 
     // Toggle visibility
     const toggleVisibility = () => {
@@ -109,7 +117,6 @@ export const ChannelRackProvider = ({ children }) => {
         );
     };
 
-
     const assignPatchToFirstEmptyChannel = (patch) => {
         const emptyChannel = channels.find(ch => ch.patch === null);
         if (emptyChannel) {
@@ -135,7 +142,6 @@ export const ChannelRackProvider = ({ children }) => {
             )
         );
     };
-
 
     return (
         <ChannelRackContext.Provider
