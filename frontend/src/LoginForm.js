@@ -1,10 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import API from './api';
 import { jwtDecode } from 'jwt-decode';
+import splashLogo from './assets/splash-logo.png'; 
+import './LoginForm.css';
 
 function LoginForm({ setToken }) {
     const [formData, setFormData] = useState({ username: '', password: '' });
     const [error, setError] = useState('');
+    const [showSplash, setShowSplash] = useState(true);
+
+    useEffect(() => {
+        const timer = setTimeout(() => setShowSplash(false), 2000); // 2 sec splash
+        return () => clearTimeout(timer);
+    }, []);
 
     const handleChange = e => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -12,20 +20,13 @@ function LoginForm({ setToken }) {
 
     const handleSubmit = async e => {
         e.preventDefault();
-
-        //  Add this to check what you're submitting
         console.log('Logging in with:', formData);
 
         try {
             const response = await API.post('/token/', formData);
-
-            const access = response.data.access;
-            const refresh = response.data.refresh;
-
-            // Decode access token
+            const { access, refresh } = response.data;
             const decoded = jwtDecode(access);
 
-            // Store tokens and user ID
             localStorage.setItem('access_token', access);
             localStorage.setItem('refresh_token', refresh);
             localStorage.setItem('user_id', decoded.user_id);
@@ -33,14 +34,27 @@ function LoginForm({ setToken }) {
             setToken(access);
             setError('');
         } catch (err) {
-            //  Log full error from backend
             console.error('Login error:', err.response?.data || err);
             setError('Login failed. Please check your credentials.');
         }
     };
 
+    //  SPLASH SCREEN SECTION
+    if (showSplash) {
+        return (
+            <div className="splash-screen">
+                <img
+                    src={splashLogo}
+                    alt="SynthSpore Logo"
+                    className="splash-image"
+                />
+            </div>
+        );
+    }
+
+    //  LOGIN FORM SECTION
     return (
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', maxWidth: '300px' }}>
+        <form onSubmit={handleSubmit} className="login-form">
             <h2>Login</h2>
             <input
                 type="text"
@@ -48,7 +62,6 @@ function LoginForm({ setToken }) {
                 placeholder="Username"
                 value={formData.username}
                 onChange={handleChange}
-                style={{ marginBottom: '8px' }}
             />
             <input
                 type="password"
@@ -56,10 +69,9 @@ function LoginForm({ setToken }) {
                 placeholder="Password"
                 value={formData.password}
                 onChange={handleChange}
-                style={{ marginBottom: '8px' }}
             />
-            <button type="submit" style={{ marginTop: '10px' }}>Login</button>
-            {error && <p style={{ color: 'red' }}>{error}</p>}
+            <button type="submit">Login</button>
+            {error && <p className="error">{error}</p>}
         </form>
     );
 }

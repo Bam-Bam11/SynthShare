@@ -18,6 +18,8 @@ import FeedPage from './pages/FeedPage';
 import PatchDetail from './pages/patchdetail';
 import { ChannelRackProvider } from './context/ChannelRackContext';
 import TuneYourEarPage from './pages/TuneYourEarPage';
+import logo from './assets/synthspore-logo.PNG';
+
 
 function InnerApp({ setUserId }) {
     const [token, setToken] = useState(localStorage.getItem('access_token') || '');
@@ -76,7 +78,10 @@ function InnerApp({ setUserId }) {
     if (!token) {
         return (
             <div style={{ padding: '20px', fontFamily: 'Arial' }}>
-                <h1>SynthShare</h1>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                    <img src={logo} alt="SynthSpore logo" style={{ height: '40px' }} />
+                    <h1 style={{ margin: 0 }}>SynthSpore</h1>
+                </div>
                 {showLogin ? (
                     <>
                         <LoginForm setToken={setToken} />
@@ -106,7 +111,10 @@ function InnerApp({ setUserId }) {
 
     return (
         <div style={{ padding: '20px', fontFamily: 'Arial' }}>
-            <h1>SynthShare</h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                <img src={logo} alt="SynthSpore logo" style={{ height: '40px' }} />
+                <h1 style={{ margin: 0 }}>SynthSpore</h1>
+            </div>
             <p>Logged in as {username}</p>
             <button onClick={handleLogout}>Logout</button>
 

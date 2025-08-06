@@ -1,0 +1,45 @@
+/* Splash screen styling */
+.splash-screen {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background-color: #111;
+  animation: fadeOut 2s ease-in-out forwards;
+}
+
+.splash-image {
+  max-width: 300px;
+  width: 60%;
+  animation: scaleFade 1.5s ease-in-out;
+}
+
+@keyframes scaleFade {
+  0% { opacity: 0; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Login form styling */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  max-width: 300px;
+  margin: 50px auto;
+  animation: fadeIn 0.5s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+input, button {
+  margin-bottom: 10px;
+  padding: 10px;
+  font-size: 1em;
+}
+
+.error {
+  color: red;
+}
