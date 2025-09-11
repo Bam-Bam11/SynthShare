@@ -32,8 +32,9 @@ const Navbar = () => {
                 <div style={{ float: 'right' }}>
                     <a href="/profile" style={{ marginRight: '10px' }}>Profile</a>
                     <a href="/feed" style={{ marginRight: '10px' }}>Feed</a>
-                    <a href="/build" style={{ marginRight: '10px' }}>Build</a>
+                    <a href="/build" style={{ marginRight: '10px' }}>Build & Compose</a>
                     <a href="/tune" style={{ marginRight: '10px' }}>Tune Your Ear</a>
+
                     <button onClick={toggleVisibility}>
                         {isVisible ? 'Hide Rack' : 'Show Rack'}
                     </button>

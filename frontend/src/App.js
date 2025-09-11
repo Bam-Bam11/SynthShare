@@ -19,6 +19,11 @@ import PatchDetail from './pages/patchdetail';
 import { ChannelRackProvider } from './context/ChannelRackContext';
 import TuneYourEarPage from './pages/TuneYourEarPage';
 import logo from './assets/synthspore-logo.PNG';
+import FollowersList from './pages/FollowersList';
+import FollowingList from './pages/FollowingList';
+import UserPostedPatches from "./pages/UserPostedPatches";
+import UserSavedPatches from "./pages/UserSavedPatches";
+import BuildComposePage from './pages/BuildComposePage';
 
 
 function InnerApp({ setUserId }) {
@@ -123,11 +128,16 @@ function InnerApp({ setUserId }) {
             <Routes>
                 <Route path="/profile/:username" element={<UserProfile />} />
                 <Route path="/feed" element={<FeedPage />} />
-                <Route path="/build" element={<SynthInterface />} />
                 <Route path="/search" element={<SearchResults />} />
                 <Route path="/patches/:id" element={<PatchDetail />} />
                 <Route path="*" element={<Navigate to={`/profile/${username}`} />} />
                 <Route path="/tune" element={<TuneYourEarPage />} />
+                <Route path="/profile/:username/followers" element={<FollowersList />} />
+                <Route path="/profile/:username/following" element={<FollowingList />} />
+                <Route path="/users/:username/posted" element={<UserPostedPatches />} />
+                <Route path="/users/:username/saved" element={<UserSavedPatches />} />
+                <Route path="/build" element={<BuildComposePage />} />
+
             </Routes>
         </div>
     );

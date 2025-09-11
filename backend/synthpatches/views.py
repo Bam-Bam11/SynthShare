@@ -4,14 +4,17 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from django.contrib.auth.models import User
 from rest_framework.exceptions import PermissionDenied
-from .models import Patch, Follow
-from .serializers import PatchSerializer, UserSerializer, FollowSerializer
+from .models import Patch, Follow, Track
+from .serializers import PatchSerializer, UserSerializer, FollowSerializer, TrackSerializer
 import random
+from .pagination import SmallPageNumberPagination
+
 
 # PATCH API VIEWSET
 class PatchViewSet(viewsets.ModelViewSet):
     serializer_class = PatchSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = SmallPageNumberPagination
 
     def get_queryset(self):
         user = self.request.user
@@ -30,17 +33,45 @@ class PatchViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
-       patch = serializer.save(uploaded_by=self.request.user)
-       patch.save() 
+        patch = serializer.save(uploaded_by=self.request.user)
+        patch.save()
 
     def get_object(self):
         queryset = Patch.objects.all()
         patch = get_object_or_404(queryset, pk=self.kwargs['pk'])
 
         if patch.uploaded_by != self.request.user and not patch.is_posted:
-            raise PermissionDenied("This patch is not publicly available.")
+            raise PermissionDenied('This patch is not publicly available.')
 
         return patch
+
+    # /api/patches/posted-by/<username>/?page=1&page_size=12
+    @action(detail=False, methods=['get'], url_path=r'posted-by/(?P<username>[^/.]+)')
+    def posted_by(self, request, username=None):
+        user = get_object_or_404(User, username=username)
+        qs = Patch.objects.filter(uploaded_by=user, is_posted=True).order_by('-created_at')
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            serializer = PatchSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+        serializer = PatchSerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    # /api/patches/saved-by/<username>/?page=1&page_size=12
+    @action(detail=False, methods=['get'], url_path=r'saved-by/(?P<username>[^/.]+)')
+    def saved_by(self, request, username=None):
+        # Saved patches are private: only owner can view the list
+        user = get_object_or_404(User, username=username)
+        if request.user != user:
+            return Response({'detail': 'Forbidden'}, status=403)
+        qs = Patch.objects.filter(uploaded_by=user, is_posted=False).order_by('-updated_at')
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            serializer = PatchSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+        serializer = PatchSerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data)
+
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
@@ -53,6 +84,7 @@ def post_patch(request, pk):
     except Patch.DoesNotExist:
         return Response({'error': 'Patch not found or not owned by user.'}, status=404)
 
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def unpost_patch(request, pk):
@@ -63,6 +95,7 @@ def unpost_patch(request, pk):
         return Response({'success': 'Patch has been unposted.'})
     except Patch.DoesNotExist:
         return Response({'error': 'Patch not found or not owned by user.'}, status=404)
+
 
 # USER VIEWSET — for search by username
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
@@ -92,13 +125,54 @@ def register(request):
 
 # USER DETAIL BY USERNAME ENDPOINT
 @api_view(['GET'])
+@permission_classes([permissions.AllowAny])  # allow viewing profiles without login
 def get_user_by_username(request, username):
     try:
         user = User.objects.get(username=username)
-        serializer = UserSerializer(user)
-        return Response(serializer.data)
     except User.DoesNotExist:
         return Response({'error': 'User not found'}, status=404)
+
+    follower_count = Follow.objects.filter(following=user).count()
+    following_count = Follow.objects.filter(follower=user).count()
+    is_following = False
+    if request.user.is_authenticated and request.user != user:
+        is_following = Follow.objects.filter(follower=request.user, following=user).exists()
+
+    return Response({
+        'id': user.id,
+        'username': user.username,
+        'follower_count': follower_count,
+        'following_count': following_count,
+        'is_following': is_following,
+    })
+
+
+# Followers of a given username
+@api_view(['GET'])
+def followers_of_user(request, username):
+    try:
+        target = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found'}, status=404)
+
+    follower_rows = Follow.objects.filter(following=target).select_related('follower')
+    followers = [f.follower for f in follower_rows]
+    data = UserSerializer(followers, many=True).data
+    return Response({'username': target.username, 'count': len(data), 'users': data})
+
+
+# Following for a given username
+@api_view(['GET'])
+def following_of_user(request, username):
+    try:
+        target = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found'}, status=404)
+
+    following_rows = Follow.objects.filter(follower=target).select_related('following')
+    following = [f.following for f in following_rows]
+    data = UserSerializer(following, many=True).data
+    return Response({'username': target.username, 'count': len(data), 'users': data})
 
 
 # NEW: CURRENT USER INFO ENDPOINT (/users/me/)
@@ -141,15 +215,19 @@ class FollowViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Not following this user.'}, status=404)
 
 
-# FEED VIEW — shows recent patches from followed users
+# FEED VIEW — shows recent posted patches from followed users (paginated)
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def feed_view(request):
     user = request.user
     followed_users = Follow.objects.filter(follower=user).values_list('following', flat=True)
-    recent_patches = Patch.objects.filter(uploaded_by__in=followed_users).order_by('-created_at')
-    serializer = PatchSerializer(recent_patches, many=True)
-    return Response(serializer.data)
+    qs = Patch.objects.filter(uploaded_by__in=followed_users, is_posted=True).order_by('-created_at')
+
+    paginator = SmallPageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    serializer = PatchSerializer(page, many=True, context={'request': request})
+    return paginator.get_paginated_response(serializer.data)
+
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -161,6 +239,7 @@ def random_posted_patch(request):
     serializer = PatchSerializer(patch)
     return Response(serializer.data)
 
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def lineage_view(request, pk):
@@ -170,7 +249,6 @@ def lineage_view(request, pk):
         return Response({'error': 'Patch not found.'}, status=404)
 
     root = current_patch.root or current_patch
-
     all_patches = Patch.objects.filter(root=root, is_posted=True).order_by('created_at')
 
     # Build patch node data
@@ -202,7 +280,7 @@ def lineage_view(request, pk):
     C = 120   # vertical spacing (edits)
     D = 160   # horizontal spacing (forks)
 
-    column_map = {}  # uploaded_by_id → fork column index
+    column_map = {}  # uploaded_by_id -> fork column index
     column_map[root.uploaded_by.id] = 0  # root user starts in column 0
 
     node_map[root.id]['x'] = X0
@@ -237,8 +315,70 @@ def lineage_view(request, pk):
 
         node['x'] = x
         node['y'] = y
-        
+
     return Response({
         'nodes': list(node_map.values()),
         'edges': edges,
     })
+
+class TrackViewSet(viewsets.ModelViewSet):
+    serializer_class = TrackSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = SmallPageNumberPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        uploaded_by = self.request.query_params.get('uploaded_by')
+        qs = Track.objects.all().order_by('-created_at')
+
+        if uploaded_by:
+            if str(user.id) == uploaded_by:
+                qs = qs.filter(uploaded_by__id=uploaded_by)
+            else:
+                qs = qs.filter(uploaded_by__id=uploaded_by, is_posted=True)
+        else:
+            qs = qs.filter(is_posted=True)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(uploaded_by=self.request.user)
+
+    def get_object(self):
+        track = get_object_or_404(Track, pk=self.kwargs['pk'])
+        if track.uploaded_by != self.request.user and not track.is_posted:
+            self.permission_denied(self.request, message='This track is not publicly available.')
+        return track
+
+    @action(detail=True, methods=['post'])
+    def post(self, request, pk=None):
+        track = self.get_object()
+        if track.uploaded_by != request.user:
+            return Response({'error': 'Not your track.'}, status=403)
+        track.is_posted = True
+        track.save(update_fields=['is_posted'])
+        return Response({'success': True})
+
+    @action(detail=True, methods=['post'])
+    def unpost(self, request, pk=None):
+        track = self.get_object()
+        if track.uploaded_by != request.user:
+            return Response({'error': 'Not your track.'}, status=403)
+        track.is_posted = False
+        track.save(update_fields=['is_posted'])
+        return Response({'success': True})
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def fork_track(request, pk):
+    """
+    Create a new Track as a fork of pk. Client may optionally pass a mutated items array.
+    """
+    parent = get_object_or_404(Track, pk=pk)
+    data = request.data.copy()
+    data['root'] = parent.root_id or parent.id
+    data['stem'] = parent.id
+    data['immediate_predecessor'] = parent.id
+    serializer = TrackSerializer(data=data, context={'request': request})
+    serializer.is_valid(raise_exception=True)
+    track = serializer.save()
+    return Response(TrackSerializer(track).data, status=201)
