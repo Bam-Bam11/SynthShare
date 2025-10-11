@@ -16,7 +16,9 @@ from .views import (
     followers_of_user,
     following_of_user,
     TrackViewSet, 
-    fork_track,
+    fork_track, 
+    TrackViewSet, 
+    track_lineage_view, 
 )
 
 router = DefaultRouter()
@@ -37,6 +39,7 @@ urlpatterns = [
     path('patches/<int:pk>/unpost/', unpost_patch),
     path('patches/random/', random_posted_patch),
     path('patches/<int:pk>/lineage/', lineage_view),
+    path('tracks/<int:pk>/lineage/', track_lineage_view), 
     path('', include(router.urls)),
     path('tracks/<int:pk>/fork/', fork_track),
 ]

@@ -1,6 +1,8 @@
-from django.db import models
+from django.db import models, transaction
 from django.contrib.auth.models import User
+from django.db.models import F
 from .utils import to_base32
+
 
 class Patch(models.Model):
     name = models.CharField(max_length=100)
@@ -12,82 +14,219 @@ class Patch(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     downloads = models.PositiveIntegerField(default=0)
     forks = models.PositiveIntegerField(default=0)
+
+    # lineage
     root = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='descendants')
     stem = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='forks_from')
     immediate_predecessor = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='direct_successors')
+
+    # "<fork>.<edit>" in base-32 (digits 0-9, a-v)
     version = models.CharField(max_length=20, blank=True, default='0.0')
+
     note = models.CharField(max_length=10, default='C4')
     duration = models.CharField(max_length=10, default='8n')
     is_posted = models.BooleanField(default=False)
 
-    def save(self, *args, **kwargs):
-        is_new = self.pk is None
-        print(f"[DEBUG] Patch save triggered: name={self.name}, is_new={is_new}, uploaded_by_id={self.uploaded_by_id}")
-
-        if is_new:
-            super().save(*args, **kwargs)  # Save first to get PK
-            self._assign_version_and_lineage()
-            super().save(update_fields=['root', 'version', 'immediate_predecessor'])
-        else:
-            super().save(*args, **kwargs)
-
-    def _assign_version_and_lineage(self):
-        if not self.root:
-            self.root = self
-            self.version = '0.0'
-            self.immediate_predecessor = None
-            return
-
-        # Always track immediate predecessor
-        if not self.immediate_predecessor:
-            self.immediate_predecessor = self.stem
-
-        # Editing: same user continuing a stem
-        if self.stem and self.uploaded_by_id == self.stem.uploaded_by_id:
-            fork_str = self.stem.version.split('.')[0]
-
-            # Extract the fork index string from stem.version
-            fork_str = self.stem.version.split('.')[0]
-
-            # Count all patches by this user under this root with that same fork index
-            edit_index = Patch.objects.filter(
-                root=self.root,
-                uploaded_by_id=self.uploaded_by_id,
-                version__startswith=f'{fork_str}.'
-            ).count()
-
-
-            self.version = f'{fork_str}.{to_base32(edit_index)}'
-
-        else:
-            # Forking — increment fork counter and assign new index
-            if self.stem:
-                self.stem.forks += 1
-                self.stem.save(update_fields=['forks'])
-
-            fork_index = self._get_next_fork_index()
-            self.version = f'{to_base32(fork_index)}.0'
-
-    def _get_next_fork_index(self):
-        versions = Patch.objects.filter(root=self.root).values_list('version', flat=True)
-        fork_indices = []
-
-        for version in versions:
-            try:
-                fork_str, edit_str = version.split('.')
-                if edit_str == '0':
-                    fork_indices.append(int(fork_str, 32))
-            except Exception:
-                continue
-
-        return max(fork_indices, default=0) + 1
-
+    class Meta:
+        ordering = ['-created_at']
 
     def __str__(self):
         return f'{self.name} (v{self.version})'
 
-    class Meta:
-        ordering = ['-created_at']
+    # --------------------------
+    # Explicit constructors
+    # --------------------------
+    @classmethod
+    @transaction.atomic
+    def create_root(cls, *, name, uploaded_by, parameters, synth_type, **extra):
+        inst = cls(
+            name=name,
+            uploaded_by=uploaded_by,
+            parameters=parameters,
+            synth_type=synth_type,
+            **extra
+        )
+        inst.save()
+        return inst
+
+    @classmethod
+    @transaction.atomic
+    def fork_from(cls, source: 'Patch', *, name, uploaded_by, parameters, synth_type, **extra):
+        root = source.root or source
+        inst = cls(
+            name=name,
+            uploaded_by=uploaded_by,
+            parameters=parameters,
+            synth_type=synth_type,
+            root=root,
+            stem=source,                   # we fork FROM this node
+            immediate_predecessor=source,  # exact parent
+            **extra
+        )
+        # allow same-user forks by forcing fork path in save()
+        inst._force_fork = True
+        inst.save()
+        return inst
+
+    @classmethod
+    @transaction.atomic
+    def edit_from(cls, source: 'Patch', *, name, uploaded_by, parameters, synth_type, **extra):
+        root = source.root or source
+        inst = cls(
+            name=name,
+            uploaded_by=uploaded_by,
+            parameters=parameters,
+            synth_type=synth_type,
+            root=root,
+            stem=source,                   # the exact node we edited
+            immediate_predecessor=source,  # one-step link
+            **extra
+        )
+        inst.save()
+        return inst
+
+    # --------------------------
+    # Core lineage/versioning
+    # --------------------------
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+
+        if not is_new:
+            return
+
+        # Root creation (no root supplied)
+        if not self.root:
+            self.root = self
+            self.stem = self
+            self.immediate_predecessor = None
+            self.version = '0.0'
+            super().save(update_fields=['root', 'stem', 'immediate_predecessor', 'version'])
+            return
+
+        # Defensive default if client forgot stem
+        if not self.stem:
+            self.stem = self.root
+
+        # Edit vs fork decision
+        if self.uploaded_by_id == self.stem.uploaded_by_id and not getattr(self, "_force_fork", False):
+            self._finalise_edit()
+        else:
+            self._finalise_fork()
+
+    @transaction.atomic
+    def _finalise_fork(self):
+        source_node = self.stem  # capture before we repoint stem
+        next_fork_index = self._next_fork_index_for_root(self.root)
+        self.version = f'{to_base32(next_fork_index)}.0'
+        self.immediate_predecessor = source_node
+        self.stem_id = self.pk  # fork head anchors its lineage
+        super().save(update_fields=['version', 'immediate_predecessor', 'stem'])
+
+        # increment predecessor's forks counter
+        if source_node_id := getattr(source_node, 'pk', None):
+            Patch.objects.filter(pk=source_node_id).update(forks=F('forks') + 1)
+
+    @transaction.atomic
+    def _finalise_edit(self):
+        source_node = self.stem  # the exact node we edited
+        fork_str = (source_node.version or '0.0').split('.', 1)[0]
+
+        # find fork head x.0 (root if x == '0'), with safe fallbacks to avoid 500s on legacy data
+        fork_head = self._safe_fork_head_lookup(self.root, source_node, fork_str)
+
+        # stem should point to the fork head; predecessor is the exact parent node
+        self.stem = fork_head
+        if not self.immediate_predecessor_id:
+            self.immediate_predecessor = source_node
+
+        # --- FIX: compute next edit index as max(existing edit idx) + 1 (per user, per fork) ---
+        next_e = self._next_edit_index_user(self.root, fork_str, self.uploaded_by_id)
+
+        self.version = f'{fork_str}.{to_base32(next_e)}'
+        super().save(update_fields=['stem', 'immediate_predecessor', 'version'])
+
+    # --------------------------
+    # Helpers
+    # --------------------------
+    @staticmethod
+    def _parse_version(ver: str):
+        try:
+            f_str, e_str = (ver or '0.0').split('.', 1)
+            return int(f_str, 32), int(e_str, 32)
+        except Exception:
+            return 0, 0
+
+    @classmethod
+    @transaction.atomic
+    def _next_edit_index_user(cls, root: 'Patch', fork_str: str, user_id: int) -> int:
+        """
+        Return next edit index (per user, per fork) under a root, as max(existing e) + 1.
+        Ensures first edit after 'x.0' is 'x.1' (no off-by-one).
+        """
+        prefix = f'{fork_str}.'
+        versions = list(
+            cls.objects.select_for_update()
+            .filter(root=root, uploaded_by_id=user_id, version__startswith=prefix)
+            .values_list('version', flat=True)
+        )
+        max_e = 0
+        for v in versions:
+            _, e = cls._parse_version(v)
+            if e > max_e:
+                max_e = e
+        return max_e + 1
+
+    @classmethod
+    def _safe_fork_head_lookup(cls, root: 'Patch', source_node: 'Patch', fork_str: str) -> 'Patch':
+        """
+        Returns the fork head (x.0) for a given fork index string.
+        Falls back gracefully if a clean head cannot be found (legacy/inconsistent data):
+          1) if fork_str == '0' -> root
+          2) try exact 'x.0'
+          3) any earliest node in that fork lineage (version startswith 'x.')
+          4) source_node itself if it matches fork_str
+          5) root (least-bad fallback)
+        """
+        if fork_str == '0':
+            return root
+
+        head = cls.objects.filter(root=root, version=f'{fork_str}.0').first()
+        if head:
+            return head
+
+        # fallback: earliest node in this fork lineage
+        head = cls.objects.filter(root=root, version__startswith=f'{fork_str}.').order_by('created_at').first()
+        if head:
+            return head
+
+        # fallback: use source_node if it is in this fork
+        if (source_node.version or '0.0').split('.', 1)[0] == fork_str:
+            return source_node
+
+        # last resort
+        return root
+
+    @classmethod
+    @transaction.atomic
+    def _next_fork_index_for_root(cls, root: 'Patch') -> int:
+        """
+        Compute the next global fork index under the given root.
+        We look only at fork heads (edit index == '0') and decode base-32 with int(..., 32).
+        """
+        versions = list(
+            cls.objects.select_for_update().filter(root=root).values_list('version', flat=True)
+        )
+        fork_indices = []
+        for v in versions:
+            try:
+                f_str, e_str = v.split('.', 1)
+                if e_str == '0':
+                    fork_indices.append(int(f_str, 32))
+            except Exception:
+                continue
+        return (max(fork_indices) + 1) if fork_indices else 1  # after 0.0, first fork is 1.0
+
 
 class Follow(models.Model):
     follower = models.ForeignKey(User, related_name='following', on_delete=models.CASCADE)
@@ -99,71 +238,28 @@ class Follow(models.Model):
 
     def __str__(self):
         return f"{self.follower.username} follows {self.following.username}"
-    
 
-#Track implementation
+
+# --------------------------
+# Track implementation
+# --------------------------
 
 class Track(models.Model):
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True, default='')
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tracks')
     bpm = models.PositiveIntegerField(default=120)
-    time_signature = models.CharField(max_length=8, default='4/4')  # optional MVP
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     downloads = models.PositiveIntegerField(default=0)
     forks = models.PositiveIntegerField(default=0)
-    # versioning lineage (mirror Patch)
+
+    # lineage (mirror Patch)
     root = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='track_descendants')
     stem = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='track_forks_from')
     immediate_predecessor = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='track_direct_successors')
     version = models.CharField(max_length=20, blank=True, default='0.0')
     is_posted = models.BooleanField(default=False)
-
-    def save(self, *args, **kwargs):
-        is_new = self.pk is None
-        super().save(*args, **kwargs)
-        if is_new:
-            self._assign_version_and_lineage()
-            super().save(update_fields=['root', 'version', 'immediate_predecessor'])
-
-    def _assign_version_and_lineage(self):
-        if not self.root:
-            self.root = self
-            self.version = '0.0'
-            self.immediate_predecessor = None
-            return
-
-        if not self.immediate_predecessor:
-            self.immediate_predecessor = self.stem
-
-        # edit vs fork logic mirrors Patch
-        if self.stem and self.uploaded_by_id == self.stem.uploaded_by_id:
-            fork_str = self.stem.version.split('.')[0]
-            edit_index = Track.objects.filter(
-                root=self.root,
-                uploaded_by_id=self.uploaded_by_id,
-                version__startswith=f'{fork_str}.'
-            ).count()
-            self.version = f'{fork_str}.{to_base32(edit_index)}'
-        else:
-            if self.stem:
-                self.stem.forks += 1
-                self.stem.save(update_fields=['forks'])
-            fork_index = self._get_next_fork_index()
-            self.version = f'{to_base32(fork_index)}.0'
-
-    def _get_next_fork_index(self):
-        versions = Track.objects.filter(root=self.root).values_list('version', flat=True)
-        fork_indices = []
-        for version in versions:
-            try:
-                fork_str, edit_str = version.split('.')
-                if edit_str == '0':
-                    fork_indices.append(int(fork_str, 32))
-            except Exception:
-                continue
-        return max(fork_indices, default=0) + 1
 
     class Meta:
         ordering = ['-created_at']
@@ -171,20 +267,196 @@ class Track(models.Model):
     def __str__(self):
         return f'{self.name} (v{self.version})'
 
+    # explicit constructors (mirror Patch)
+    @classmethod
+    @transaction.atomic
+    def create_root(cls, *, name, uploaded_by, bpm=120, description='', **extra):
+        inst = cls(
+            name=name,
+            uploaded_by=uploaded_by,
+            bpm=bpm,
+            description=description,
+            **extra
+        )
+        inst.save()
+        return inst
+
+    @classmethod
+    @transaction.atomic
+    def fork_from(cls, source: 'Track', *, name, uploaded_by, **extra):
+        root = source.root or source
+        inst = cls(
+            name=name,
+            uploaded_by=uploaded_by,
+            root=root,
+            stem=source,
+            immediate_predecessor=source,
+            **extra
+        )
+        inst._force_fork = True
+        inst.save()
+        return inst
+
+    @classmethod
+    @transaction.atomic
+    def edit_from(cls, source: 'Track', *, name, uploaded_by, **extra):
+        root = source.root or source
+        inst = cls(
+            name=name,
+            uploaded_by=uploaded_by,
+            root=root,
+            stem=source,
+            immediate_predecessor=source,
+            **extra
+        )
+        inst.save()
+        return inst
+
+    # core lineage/versioning
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+
+        if not is_new:
+            return
+
+        # Root creation
+        if not self.root:
+            self.root = self
+            self.stem = self
+            self.immediate_predecessor = None
+            self.version = '0.0'
+            super().save(update_fields=['root', 'stem', 'immediate_predecessor', 'version'])
+            return
+
+        # Defensive default
+        if not self.stem:
+            self.stem = self.root
+
+        # Edit vs fork
+        if self.uploaded_by_id == self.stem.uploaded_by_id and not getattr(self, "_force_fork", False):
+            self._finalise_edit()
+        else:
+            self._finalise_fork()
+
+    @transaction.atomic
+    def _finalise_fork(self):
+        source_node = self.stem
+        next_fork_index = self._next_fork_index_for_root(self.root)
+        self.version = f'{to_base32(next_fork_index)}.0'
+        self.immediate_predecessor = source_node
+        self.stem_id = self.pk
+        super().save(update_fields=['version', 'immediate_predecessor', 'stem'])
+        if source_node_id := getattr(source_node, 'pk', None):
+            Track.objects.filter(pk=source_node_id).update(forks=F('forks') + 1)
+
+    @transaction.atomic
+    def _finalise_edit(self):
+        source_node = self.stem
+        fork_str = (source_node.version or '0.0').split('.', 1)[0]
+        fork_head = self._safe_fork_head_lookup(self.root, source_node, fork_str)
+
+        self.stem = fork_head
+        if not self.immediate_predecessor_id:
+            self.immediate_predecessor = source_node
+
+        # --- FIX (same as Patch): next edit index = max(existing e) + 1 (per user, per fork) ---
+        next_e = self._next_edit_index_user(self.root, fork_str, self.uploaded_by_id)
+
+        self.version = f'{fork_str}.{to_base32(next_e)}'
+        super().save(update_fields=['stem', 'immediate_predecessor', 'version'])
+
+    # helpers (mirror Patch)
+    @staticmethod
+    def _parse_version(ver: str):
+        try:
+            f_str, e_str = (ver or '0.0').split('.', 1)
+            return int(f_str, 32), int(e_str, 32)
+        except Exception:
+            return 0, 0
+
+    @classmethod
+    @transaction.atomic
+    def _next_edit_index_user(cls, root: 'Track', fork_str: str, user_id: int) -> int:
+        prefix = f'{fork_str}.'
+        versions = list(
+            cls.objects.select_for_update()
+            .filter(root=root, uploaded_by_id=user_id, version__startswith=prefix)
+            .values_list('version', flat=True)
+        )
+        max_e = 0
+        for v in versions:
+            _, e = cls._parse_version(v)
+            if e > max_e:
+                max_e = e
+        return max_e + 1
+
+    @classmethod
+    def _safe_fork_head_lookup(cls, root: 'Track', source_node: 'Track', fork_str: str) -> 'Track':
+        if fork_str == '0':
+            return root
+        head = cls.objects.filter(root=root, version=f'{fork_str}.0').first()
+        if head:
+            return head
+        head = cls.objects.filter(root=root, version__startswith=f'{fork_str}.').order_by('created_at').first()
+        if head:
+            return head
+        if (source_node.version or '0.0').split('.', 1)[0] == fork_str:
+            return source_node
+        return root
+
+    @classmethod
+    @transaction.atomic
+    def _next_fork_index_for_root(cls, root: 'Track') -> int:
+        versions = list(
+            cls.objects.select_for_update().filter(root=root).values_list('version', flat=True)
+        )
+        fork_indices = []
+        for v in versions:
+            try:
+                f_str, e_str = v.split('.', 1)
+                if e_str == '0':
+                    fork_indices.append(int(f_str, 32))
+            except Exception:
+                continue
+        return (max(fork_indices) + 1) if fork_indices else 1
+
+
+# Replace your current TrackItem with this (or edit the fields accordingly)
 
 class TrackItem(models.Model):
     """
-    One channel/part in the track. MVP matches 16-step boolean pattern
-    and a single note/duration per hit (uses the patch's defaults).
+    One clip on a lane.
+    Mirrors ComposePanel 'clips' schema: lane (order_index),
+    startBeat/lengthBeats, plus a frozen patch snapshot.
     """
     track = models.ForeignKey(Track, on_delete=models.CASCADE, related_name='items')
-    order_index = models.PositiveIntegerField(default=0)   # vertical order in UI
-    patch = models.ForeignKey('Patch', on_delete=models.PROTECT)  # reference for lineage/credits
-    patch_snapshot = models.JSONField()  # frozen params for reproducibility
-    steps = models.JSONField(default=list)  # e.g. [true/false x16]
-    note = models.CharField(max_length=10, default='C4')   # per-hit note default
-    duration = models.CharField(max_length=10, default='8n')
-    gain = models.FloatField(default=1.0)  # per-channel gain
+
+    # Lane index in the UI (0-based)
+    order_index = models.PositiveIntegerField(default=0)
+
+    # Which patch is referenced, and a frozen copy for reproducibility
+    patch = models.ForeignKey('Patch', on_delete=models.PROTECT)
+    patch_snapshot = models.JSONField()
+
+    # Clip timing in beats (ComposePanel uses fractional beats)
+    start_beat = models.FloatField(default=0.0)
+    length_beats = models.FloatField(default=1.0)
+
+    # Optional display label for the clip
+    label = models.CharField(max_length=120, blank=True, default='')
 
     class Meta:
-        ordering = ['order_index', 'id']
+        ordering = ['order_index', 'start_beat', 'id']
+        indexes = [
+            models.Index(fields=['track', 'order_index', 'start_beat']),
+        ]
+
+class SavedTrack(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='saved_tracks')
+    track = models.ForeignKey('Track', on_delete=models.CASCADE, related_name='saves')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'track')
+        ordering = ['-created_at']

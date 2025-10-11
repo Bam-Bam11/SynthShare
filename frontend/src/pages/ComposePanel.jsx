@@ -45,7 +45,7 @@ const loadDraft = () => {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
     return raw ? JSON.parse(raw) : null;
-  } catch {
+  } catch (e) {
     return null;
   }
 };
@@ -58,7 +58,7 @@ const defaultLaneMeta = (i) => ({
   solo: false,
 });
 
-// ---------- NEW: robust API helpers (user + pagination) ----------
+// ---------- API helpers ----------
 async function getCurrentUserId() {
   const { data } = await API.get('/users/me/');
   if (data?.id) return String(data.id);
@@ -72,10 +72,7 @@ async function fetchAllPatchesForUser(uid, basePath = '/patches/') {
     const { data } = await API.get(basePath, {
       params: { uploaded_by: uid, page, page_size: 100 },
     });
-    if (Array.isArray(data)) {
-      out.push(...data);
-      break;
-    }
+    if (Array.isArray(data)) { out.push(...data); break; }
     const results = Array.isArray(data?.results) ? data.results : [];
     out.push(...results);
     if (!data?.next) break;
@@ -86,11 +83,8 @@ async function fetchAllPatchesForUser(uid, basePath = '/patches/') {
 
 async function loadUserPatches() {
   const uid = await getCurrentUserId();
-  try {
-    return await fetchAllPatchesForUser(uid, '/patches/');
-  } catch {
-    return await fetchAllPatchesForUser(uid, '/api/patches/');
-  }
+  try { return await fetchAllPatchesForUser(uid, '/patches/'); }
+  catch (e) { return await fetchAllPatchesForUser(uid, '/api/patches/'); }
 }
 // -----------------------------------------------------------------
 
@@ -124,6 +118,11 @@ export default function ComposePanel() {
     return Array.from({ length: Math.max(lanes, arr.length || 0) }).map((_, i) => arr[i] ?? defaultLaneMeta(i));
   });
 
+  // project meta + save
+  const [projectName, setProjectName] = useState(draft?.projectName || 'Untitled');
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState('');
+
   // ensure laneMeta size follows lanes
   useEffect(() => {
     setLaneMeta((prev) => {
@@ -133,17 +132,21 @@ export default function ComposePanel() {
     });
   }, [lanes]);
 
-  // ---- persist on change ----
+  // ---- persist auto-draft on change ----
   useEffect(() => {
     try {
       localStorage.setItem(
         DRAFT_KEY,
-        JSON.stringify({ bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta })
+        JSON.stringify({
+          projectName,
+          bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta
+        })
       );
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.warn('Failed to save track draft', e);
     }
-  }, [bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta]);
+  }, [projectName, bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta]);
 
   // ---- derived layout/time ----
   const secPerBeat = 60 / bpm;
@@ -245,6 +248,7 @@ export default function ComposePanel() {
 
       maxLane = Math.max(maxLane, targetLane + 1);
 
+      // 16 steps -> 16ths -> 1/4 beat per step
       ch.steps.forEach((on, stepIndex) => {
         if (!on) return;
         const startBeat = stepIndex / 4;
@@ -322,29 +326,25 @@ export default function ComposePanel() {
   // ---- Playback (mute/solo aware) ----
   useEffect(() => { Tone.getTransport().bpm.value = bpm; }, [bpm]);
 
-  // Keep Tone.Transport loop settings in sync with UI;
-  // also jump playhead on loop enable/disable as requested.
+  // Keep Tone.Transport loop settings in sync with UI and jump playhead on change
   useEffect(() => {
     const transport = Tone.getTransport();
     if (loopEnabled && loopRegion && loopRegion.endSec > loopRegion.startSec) {
       transport.loop = true;
       transport.loopStart = loopRegion.startSec;
       transport.loopEnd = loopRegion.endSec;
-
-      // Jump playhead to loop start immediately
       const startBeat = loopRegion.startSec / secPerBeat;
       setPlayheadBeat(startBeat);
-      try { transport.seconds = loopRegion.startSec; } catch {}
+      try { transport.seconds = loopRegion.startSec; } catch (e) {}
     } else {
-      // Loop disabled: reset to start
       transport.loop = false;
       transport.loopStart = 0;
       transport.loopEnd = lengthBeats * secPerBeat;
       setPlayheadBeat(0);
-      try { transport.seconds = 0; } catch {}
+      try { transport.seconds = 0; } catch (e) {}
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loopEnabled, loopRegion]); // lengthBeats/secPerBeat changes are handled at start
+  }, [loopEnabled, loopRegion]);
 
   const scheduleAndStart = async () => {
     await Tone.start();
@@ -379,24 +379,66 @@ export default function ComposePanel() {
             duration: clip.patch?.duration || '8n',
           }, time);
         } catch (e) {
+          // eslint-disable-next-line no-console
           console.warn('PlayPatch failed for clip', clip, e);
         }
       }, triggerAtSec);
     });
 
-    // Start at loop start if looping, else at 0
+    // When not looping, schedule a hard stop at track end as a backup
+    if (!(loopEnabled && loopRegion && loopRegion.endSec > loopRegion.startSec)) {
+      const endSec = lengthBeats * secPerBeat;
+      transport.scheduleOnce(() => {
+        try {
+          transport.stop();
+          transport.seconds = 0;
+        } catch (e) {}
+        setIsPlaying(false);
+        setPlayheadBeat(0);
+        cancelAnimationFrame(rafRef.current);
+      }, endSec + 0.0001);
+    }
+
     const startAt = (loopEnabled && loopRegion) ? loopRegion.startSec : 0;
     transport.start('+0.0', startAt);
     setIsPlaying(true);
 
     cancelAnimationFrame(rafRef.current);
     const tick = () => {
-      const sec = transport.seconds % Math.max(lengthBeats * secPerBeat, 0.0001);
-      const beat = sec / secPerBeat;
-      setPlayheadBeat(beat);
+      const transport = Tone.getTransport();
+      const trackEndSec = lengthBeats * secPerBeat;
+      const secNow = transport.seconds;
+
+      const looping = loopEnabled && loopRegion && loopRegion.endSec > loopRegion.startSec;
+      let followBeat;
+
+      if (!looping) {
+        // stop at end, reset UI
+        if (secNow >= trackEndSec - 0.001) {
+          try {
+            transport.stop();
+            transport.seconds = 0;
+          } catch (e) {}
+          setIsPlaying(false);
+          setPlayheadBeat(0);
+          cancelAnimationFrame(rafRef.current);
+          return;
+        }
+        const displaySec = Math.min(secNow, trackEndSec);
+        followBeat = displaySec / secPerBeat;
+        setPlayheadBeat(followBeat);
+      } else {
+        const start = loopRegion.startSec;
+        const end = loopRegion.endSec;
+        const span = Math.max(0.001, end - start);
+        const phase = ((secNow - start) % span + span) % span;
+        const displaySec = start + phase;
+        followBeat = displaySec / secPerBeat;
+        setPlayheadBeat(followBeat);
+      }
 
       if (followOn && gridRef.current) {
-        const x = beat * pxPerBeat + LANE_GUTTER;
+        const x = followBeat * pxPerBeat + LANE_GUTTER;
         const grid = gridRef.current;
         const viewLeft = grid.scrollLeft;
         const viewRight = viewLeft + grid.clientWidth;
@@ -407,8 +449,10 @@ export default function ComposePanel() {
       }
       rafRef.current = requestAnimationFrame(tick);
     };
+
+    // kick off RAF loop and close function
     rafRef.current = requestAnimationFrame(tick);
-  };
+  }; // <-- end scheduleAndStart
 
   const togglePlay = async () => {
     if (isPlaying) {
@@ -435,7 +479,7 @@ export default function ComposePanel() {
       try {
         Tone.getTransport().stop();
         Tone.getTransport().cancel(0);
-      } catch {}
+      } catch (e) {}
     };
   }, []);
 
@@ -518,43 +562,35 @@ export default function ComposePanel() {
     window.addEventListener('mouseup', onDragEnd);
   };
 
-const onClipMouseDown = (e, clip, handle = null) => {
-  e.stopPropagation();
-  if (pickingLoop) return;
+  const onClipMouseDown = (e, clip, handle = null) => {
+    e.stopPropagation();
+    if (pickingLoop) return;
 
-  const wasShift = e.shiftKey;
-  let nextSelected = new Set(selectedIds);
+    const wasShift = e.shiftKey;
+    let nextSelected = new Set(selectedIds);
 
-  const keepBoxGroup =
-    lastSelectionWasBox && nextSelected.size > 1 && nextSelected.has(clip.id);
+    const keepBoxGroup =
+      lastSelectionWasBox && nextSelected.size > 1 && nextSelected.has(clip.id);
 
-  if (wasShift) {
-    // Shift toggles membership but does NOT establish a "box group"
-    if (nextSelected.has(clip.id)) nextSelected.delete(clip.id);
-    else nextSelected.add(clip.id);
-    setLastSelectionWasBox(false);
-  } else if (!keepBoxGroup) {
-    // Plain click focuses to this clip unless we are clicking inside a box group
-    nextSelected = new Set([clip.id]);
-    setLastSelectionWasBox(false);
-  }
-  // else: keep the whole box group as-is
+    if (wasShift) {
+      if (nextSelected.has(clip.id)) nextSelected.delete(clip.id);
+      else nextSelected.add(clip.id);
+      setLastSelectionWasBox(false);
+    } else if (!keepBoxGroup) {
+      nextSelected = new Set([clip.id]);
+      setLastSelectionWasBox(false);
+    }
+    setSelectedIds(nextSelected);
 
-  setSelectedIds(nextSelected);
+    const baseClips = clips.filter(c => nextSelected.has(c.id)).map(c => ({ ...c }));
 
-  const baseClips = clips
-    .filter(c => nextSelected.has(c.id))
-    .map(c => ({ ...c }));
-
-  if (handle === 'l' || handle === 'r') {
-    startDrag(handle === 'l' ? 'resize-l' : 'resize-r', e, baseClips, false);
-  } else {
-    const isAlt = e.altKey || e.metaKey; // optional clone
-    startDrag('move', e, baseClips, isAlt);
-  }
-};
-
-
+    if (handle === 'l' || handle === 'r') {
+      startDrag(handle === 'l' ? 'resize-l' : 'resize-r', e, baseClips, false);
+    } else {
+      const isAlt = e.altKey || e.metaKey; // optional clone
+      startDrag('move', e, baseClips, isAlt);
+    }
+  };
 
   const onDragMove = (e) => {
     const ds = dragRef.current;
@@ -621,13 +657,11 @@ const onClipMouseDown = (e, clip, handle = null) => {
   const onGridMouseDown = (e) => {
     const grid = gridRef.current;
 
-    // If we are picking loop points, consume the click and do not start box select
+    // loop picking
     if (pickingLoop) {
       const rect = grid.getBoundingClientRect();
       const xInGridPx = e.clientX - rect.left + grid.scrollLeft - LANE_GUTTER;
       const clampedPx = Math.max(0, Math.min(xInGridPx, totalWidthPx));
-
-      // Snap to 1/16th grid for neat looping
       const beat = snap16(pxToBeat(clampedPx));
       const sec = beat * secPerBeat;
 
@@ -638,25 +672,21 @@ const onClipMouseDown = (e, clip, handle = null) => {
         const [a, b] = next;
         const startSec = Math.max(0, Math.min(a, b));
         const endSecRaw = Math.min(totalSeconds, Math.max(a, b));
-        const MIN_SPAN = 0.1; // 100 ms minimum to avoid a zero-length loop
+        const MIN_SPAN = 0.1;
         const endSec = (endSecRaw - startSec < MIN_SPAN) ? startSec + MIN_SPAN : endSecRaw;
 
-        // Apply immediately
         setLoopRegion({ startSec, endSec });
         setLoopEnabled(true);
-
-        // Jump the playhead now
         setPlayheadBeat(startSec / secPerBeat);
-        try { Tone.getTransport().seconds = startSec; } catch {}
+        try { Tone.getTransport().seconds = startSec; } catch (e) {}
 
         setPickingLoop(false);
         return [];
       });
-
       return;
     }
 
-    // Start box select (only if not clicking a clip)
+    // box select (only if not clicking a clip)
     if (e.target.getAttribute('data-clip') === '1') return;
     setSelectedIds(new Set());
     setBox({ active: true, x1: e.clientX, y1: e.clientY, x2: e.clientX, y2: e.clientY });
@@ -685,7 +715,7 @@ const onClipMouseDown = (e, clip, handle = null) => {
           if (overlap) sel.push(c.id);
         });
         setSelection(sel);
-        setLastSelectionWasBox(sel.length > 1); // NEW: remember if this was a box group
+        setLastSelectionWasBox(sel.length > 1);
         return null;
       });
       window.removeEventListener('mouseup', finish);
@@ -694,10 +724,8 @@ const onClipMouseDown = (e, clip, handle = null) => {
     return () => window.removeEventListener('mouseup', finish);
   }, [box, clips, pxPerBeat]);
 
-  // ---- computed playhead (only declared once) ----
+  // ---- computed playhead ----
   const playheadX = LANE_GUTTER + playheadBeat * pxPerBeat;
-
-  const clearDraft = () => localStorage.removeItem(DRAFT_KEY);
 
   // ===== Import Patch (saved + posted) → into a selected lane at playhead =====
   const [patches, setPatches] = useState([]);
@@ -732,8 +760,6 @@ const onClipMouseDown = (e, clip, handle = null) => {
     if (!p) return;
 
     const lane = clamp(Number(selectedImportLane) || 0, 0, Math.max(0, lanes - 1));
-
-    // Insert at current playhead (snapped), fallback to 0
     const startBeatLocal = snap16(playheadBeat || 0);
     const lengthBeatsLocal = 1;
 
@@ -760,7 +786,79 @@ const onClipMouseDown = (e, clip, handle = null) => {
   };
   // ===== END Import =====
 
+  // ===== Save Project =====
+  const buildProjectPayload = () => ({
+    name: projectName,
+    bpm,
+    lengthBeats,
+    lanes,
+    pxPerBeat,
+    clips,
+    laneMeta,
+    loopRegion,
+    version: 1
+  });
+
+  const downloadJson = (filename, data) => {
+    try {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.warn('Download failed', e);
+    }
+  };
+
+  const saveProject = async () => {
+    setSaving(true);
+    setSaveMsg('');
+    const payload = buildProjectPayload();
+
+    const attempts = [
+      { url: '/projects/', body: { name: projectName, data: payload } },
+      { url: '/api/projects/', body: { name: projectName, data: payload } },
+      { url: '/tracks/', body: { title: projectName, content: payload } },
+      { url: '/api/tracks/', body: { title: projectName, content: payload } },
+    ];
+
+    let savedToServer = false;
+    for (const a of attempts) {
+      try {
+        await API.post(a.url, a.body);
+        setSaveMsg('Saved to server.');
+        savedToServer = true;
+        break;
+      } catch (e) {}
+    }
+
+    if (!savedToServer) {
+      try {
+        const key = `savedProject:${projectName || 'Untitled'}`;
+        localStorage.setItem(key, JSON.stringify(payload));
+        setSaveMsg('Saved locally (and downloaded JSON).');
+      } catch (e) {
+        setSaveMsg('Saved as download only.');
+      }
+      downloadJson(`${projectName || 'project'}.json`, payload);
+    }
+    setSaving(false);
+  };
+  // ===== END Save Project =====
+
   // ----- render -----
+  // Precompute safe grid geometry to avoid null deref in overlay
+  const gridNode = gridRef.current;
+  const gridRect = gridNode ? gridNode.getBoundingClientRect() : { left: 0, top: 0 };
+  const gridLeft = gridRect.left;
+  const gridTop = gridRect.top;
+  const gridScrollLeft = gridNode ? gridNode.scrollLeft : 0;
+
   return (
     <div>
       {/* Controls */}
@@ -783,7 +881,7 @@ const onClipMouseDown = (e, clip, handle = null) => {
           </span>
         )}
         {loopEnabled && !pickingLoop && (
-          <>
+          <React.Fragment>
             <span style={{ fontFamily: 'monospace' }}>
               Loop: {fmtTime(loopRegion?.startSec ?? 0)} - {fmtTime(loopRegion?.endSec ?? 0)}
             </span>
@@ -792,12 +890,12 @@ const onClipMouseDown = (e, clip, handle = null) => {
                 setLoopEnabled(false);
                 setLoopRegion(null);
                 setPlayheadBeat(0);
-                try { Tone.getTransport().seconds = 0; } catch {}
+                try { Tone.getTransport().seconds = 0; } catch (e) {}
               }}
             >
               Clear loop
             </button>
-          </>
+          </React.Fragment>
         )}
 
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -875,11 +973,20 @@ const onClipMouseDown = (e, clip, handle = null) => {
           {fetchError ? <span style={{ color: 'crimson' }}>{fetchError}</span> : null}
         </div>
 
-        <div style={{ marginLeft: 'auto', display:'flex', gap:8 }}>
-          <div style={{ fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' }}>
-            Hover:&nbsp;{hoverSeconds == null ? '—' : fmtTime(hoverSeconds)}
-          </div>
-          <button onClick={() => { localStorage.removeItem(DRAFT_KEY); }} title="Remove saved draft from localStorage">Clear Draft</button>
+        {/* Project save controls */}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+          <label htmlFor="projectName"><strong>Project:</strong></label>
+          <input
+            id="projectName"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            placeholder="Untitled"
+            style={{ width: 220 }}
+          />
+          <button onClick={saveProject} disabled={saving} title="Save your project">
+            {saving ? 'Saving...' : 'Save Project'}
+          </button>
+          {saveMsg ? <span style={{ fontStyle: 'italic' }}>{saveMsg}</span> : null}
         </div>
       </div>
 
@@ -947,7 +1054,7 @@ const onClipMouseDown = (e, clip, handle = null) => {
           cursor: pickingLoop ? 'crosshair' : (box?.active ? 'crosshair' : 'default'),
         }}
       >
-        {/* Lane labels (name/color + M/S) */}
+        {/* Lane labels */}
         <div
           style={{
             position: 'sticky',
@@ -1138,8 +1245,8 @@ const onClipMouseDown = (e, clip, handle = null) => {
           <div
             style={{
               position: 'absolute',
-              left: Math.min(box.x1, box.x2) - gridRef.current.getBoundingClientRect().left + gridRef.current.scrollLeft,
-              top: Math.min(box.y1, box.y2) - gridRef.current.getBoundingClientRect().top,
+              left: Math.min(box.x1, box.x2) - gridLeft + gridScrollLeft,
+              top: Math.min(box.y1, box.y2) - gridTop,
               width: Math.abs(box.x2 - box.x1),
               height: Math.abs(box.y2 - box.y1),
               border: '1px dashed #2a63d4',

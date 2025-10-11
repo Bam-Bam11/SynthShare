@@ -8,12 +8,14 @@ from .models import Patch, Follow, Track
 from .serializers import PatchSerializer, UserSerializer, FollowSerializer, TrackSerializer
 import random
 from .pagination import SmallPageNumberPagination
+from django.db.models import Q
+from collections import defaultdict, deque
 
 
 # PATCH API VIEWSET
 class PatchViewSet(viewsets.ModelViewSet):
     serializer_class = PatchSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
     pagination_class = SmallPageNumberPagination
 
     def get_queryset(self):
@@ -33,8 +35,7 @@ class PatchViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
-        patch = serializer.save(uploaded_by=self.request.user)
-        patch.save()
+        serializer.save()
 
     def get_object(self):
         queryset = Patch.objects.all()
@@ -241,89 +242,296 @@ def random_posted_patch(request):
 
 
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
+@permission_classes([permissions.AllowAny])
 def lineage_view(request, pk):
+    """
+    Patch lineage graph payload.
+    Layout:
+      - Columns (x): fork index (base-32 'x' in 'x.y')
+      - Row (y): max(
+            baseline depth from root via immediate_predecessor + (sibling_rank-1),
+            chronological rank within the fork column
+        ), then bumped up if occupied.
+      - Edges: immediate_predecessor -> node
+    """
     try:
-        current_patch = Patch.objects.get(pk=pk)
+        current_patch = Patch.objects.select_related('uploaded_by', 'root', 'immediate_predecessor').get(pk=pk)
     except Patch.DoesNotExist:
         return Response({'error': 'Patch not found.'}, status=404)
 
     root = current_patch.root or current_patch
-    all_patches = Patch.objects.filter(root=root, is_posted=True).order_by('created_at')
 
-    # Build patch node data
-    node_map = {}
-    for patch in all_patches:
-        node_map[patch.id] = {
-            'id': patch.id,
-            'name': patch.name,
-            'version': patch.version,
-            'downloads': patch.downloads,
-            'is_posted': patch.is_posted,
-            'isCurrent': (patch.id == current_patch.id),
-            'uploaded_by': patch.uploaded_by.username,
-            'stem': patch.stem.id if patch.stem else None,
-            'immediate_predecessor': patch.immediate_predecessor.id if patch.immediate_predecessor else None,
-            'x': 0,
-            'y': 0,
-        }
+    # Visibility rules
+    if request.user.id == current_patch.uploaded_by_id:
+        visible_q = Q(root=root)
+    else:
+        ancestor_ids = set()
+        n = current_patch
+        while n and n.id not in ancestor_ids:
+            ancestor_ids.add(n.id)
+            n = n.immediate_predecessor
+        visible_q = Q(root=root) & (Q(is_posted=True) | Q(id__in=ancestor_ids))
 
-    # Build edges
+    patches = (
+        Patch.objects.filter(visible_q)
+        .select_related('uploaded_by', 'immediate_predecessor')
+        .order_by('created_at', 'id')
+    )
+    if not patches:
+        return Response({'nodes': [], 'edges': []})
+
+    def parse_version(ver: str):
+        try:
+            f_str, e_str = (ver or '0.0').split('.', 1)
+            return int(f_str, 32), int(e_str, 32)
+        except Exception:
+            return 0, 0
+
+    by_id = {p.id: p for p in patches}
+
+    # Build adjacency for BFS depth (pred -> [children])
+    children = defaultdict(list)
+    for p in patches:
+        pred_id = getattr(p.immediate_predecessor, 'id', None)
+        if pred_id and pred_id in by_id:
+            children[pred_id].append(p.id)
+
+    root_id = root.id
+
+    # 1) Baseline depth via BFS
+    depth = {root_id: 0}
+    q = deque([root_id])
+    while q:
+        cur = q.popleft()
+        for cid in children.get(cur, []):
+            if cid not in depth:
+                depth[cid] = depth[cur] + 1
+                q.append(cid)
+
+    # 2) Sibling rank per (predecessor, fork column)
+    sibling_rank = {}
+    for pred_id, kids in children.items():
+        groups = defaultdict(list)
+        for cid in kids:
+            f_idx, _ = parse_version(by_id[cid].version)
+            groups[f_idx].append(cid)
+        for f_idx, arr in groups.items():
+            arr.sort(key=lambda cid: (parse_version(by_id[cid].version)[1], by_id[cid].created_at, cid))
+            for i, cid in enumerate(arr, start=1):
+                sibling_rank[cid] = i
+    sibling_rank.setdefault(root_id, 0)
+
+    # 3) Chronological rank per fork (monotonic upward by creation time)
+    chrono_rank = {}
+    fork_groups = defaultdict(list)
+    for p in patches:
+        f_idx, _ = parse_version(p.version)
+        fork_groups[f_idx].append(p)
+    for f_idx, arr in fork_groups.items():
+        arr.sort(key=lambda p: (p.created_at, p.id))
+        for i, p in enumerate(arr):
+            chrono_rank[p.id] = i
+
+    # 4) Coordinates with column occupancy
+    X0, Y0 = 120, 640
+    COL_GAP = 160
+    ROW_GAP = 90
+
+    coords = {}
+    taken_rows = defaultdict(set)
+
+    placement = sorted(
+        patches,
+        key=lambda p: (parse_version(p.version)[0], p.created_at, p.id)
+    )
+
+    for p in placement:
+        f_idx, _ = parse_version(p.version)
+        base_d = depth.get(p.id, 0)
+        s_rank = sibling_rank.get(p.id, 1)
+        c_rank = chrono_rank.get(p.id, 0)
+
+        proposed_row = max(base_d + max(0, s_rank - 1), c_rank)
+
+        while proposed_row in taken_rows[f_idx]:
+            proposed_row += 1
+        taken_rows[f_idx].add(proposed_row)
+
+        x = X0 + f_idx * COL_GAP
+        y = Y0 - proposed_row * ROW_GAP
+        coords[p.id] = (x, y)
+
+    # 5) Edges
     edges = []
-    for node in node_map.values():
-        if node['immediate_predecessor']:
-            edges.append({'from': node['immediate_predecessor'], 'to': node['id']})
+    for p in patches:
+        pred_id = getattr(p.immediate_predecessor, 'id', None)
+        if pred_id and pred_id in coords and p.id in coords:
+            edges.append({'from': pred_id, 'to': p.id})
 
-    # Layout logic: vertical edit stack, forks branch right
-    X0 = 100  # root x
-    Y0 = 100  # root y
-    C = 120   # vertical spacing (edits)
-    D = 160   # horizontal spacing (forks)
+    # 6) Nodes payload
+    nodes = []
+    for p in patches:
+        x, y = coords[p.id]
+        f_idx, _ = parse_version(p.version)
+        nodes.append({
+            'id': p.id,
+            'name': p.name,
+            'version': p.version,
+            'downloads': p.downloads,
+            'is_posted': p.is_posted,
+            'uploaded_by': p.uploaded_by.username,
+            'isCurrent': (p.id == current_patch.id),
+            'stem': p.stem_id,
+            'immediate_predecessor': getattr(p.immediate_predecessor, 'id', None),
+            'sibling_rank': sibling_rank.get(p.id, 1),
+            'column': f_idx,
+            'x': x,
+            'y': y,
+        })
 
-    column_map = {}  # uploaded_by_id -> fork column index
-    column_map[root.uploaded_by.id] = 0  # root user starts in column 0
+    return Response({'nodes': nodes, 'edges': edges})
 
-    node_map[root.id]['x'] = X0
-    node_map[root.id]['y'] = Y0
 
-    fork_depth = {0: 0}  # depth per column
+# === NEW: TRACK LINEAGE VIEW ===
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def track_lineage_view(request, pk):
+    """
+    Track lineage graph payload (matches patch layout rules).
+    """
+    try:
+        current_track = Track.objects.select_related('uploaded_by', 'root', 'immediate_predecessor').get(pk=pk)
+    except Track.DoesNotExist:
+        return Response({'error': 'Track not found.'}, status=404)
 
-    for patch in all_patches:
-        if patch.id == root.id:
-            continue
+    root = current_track.root or current_track
 
-        node = node_map[patch.id]
+    # Visibility: owner sees all; others see posted + the path to current
+    if request.user.id == current_track.uploaded_by_id:
+        visible_q = Q(root=root)
+    else:
+        ancestor_ids = set()
+        n = current_track
+        while n and n.id not in ancestor_ids:
+            ancestor_ids.add(n.id)
+            n = n.immediate_predecessor
+        visible_q = Q(root=root) & (Q(is_posted=True) | Q(id__in=ancestor_ids))
 
-        is_edit = (
-            patch.stem and
-            patch.stem.uploaded_by_id == patch.uploaded_by_id
-        )
+    tracks = (
+        Track.objects.filter(visible_q)
+        .select_related('uploaded_by', 'immediate_predecessor')
+        .order_by('created_at', 'id')
+    )
+    if not tracks:
+        return Response({'nodes': [], 'edges': []})
 
-        if is_edit:
-            col = column_map[patch.uploaded_by.id]
-        else:
-            if patch.uploaded_by.id not in column_map:
-                col = len(column_map)
-                column_map[patch.uploaded_by.id] = col
-                fork_depth[col] = 0
-            else:
-                col = column_map[patch.uploaded_by.id]
+    def parse_version(ver: str):
+        try:
+            f_str, e_str = (ver or '0.0').split('.', 1)
+            return int(f_str, 32), int(e_str, 32)
+        except Exception:
+            return 0, 0
 
-        x = X0 + col * D
-        y = Y0 - (fork_depth[col] + 1) * C
-        fork_depth[col] += 1
+    by_id = {t.id: t for t in tracks}
 
-        node['x'] = x
-        node['y'] = y
+    # children adjacency for BFS depth
+    children = defaultdict(list)
+    for t in tracks:
+        pred_id = getattr(t.immediate_predecessor, 'id', None)
+        if pred_id and pred_id in by_id:
+            children[pred_id].append(t.id)
 
-    return Response({
-        'nodes': list(node_map.values()),
-        'edges': edges,
-    })
+    root_id = root.id
+
+    # 1) BFS depth from root
+    depth = {root_id: 0}
+    q = deque([root_id])
+    while q:
+        cur = q.popleft()
+        for cid in children.get(cur, []):
+            if cid not in depth:
+                depth[cid] = depth[cur] + 1
+                q.append(cid)
+
+    # 2) Sibling rank per (predecessor, fork column)
+    sibling_rank = {}
+    for pred_id, kids in children.items():
+        groups = defaultdict(list)   # fork_idx -> [child_id]
+        for cid in kids:
+            f_idx, _ = parse_version(by_id[cid].version)
+            groups[f_idx].append(cid)
+        for f_idx, arr in groups.items():
+            arr.sort(key=lambda cid: (parse_version(by_id[cid].version)[1], by_id[cid].created_at, cid))
+            for i, cid in enumerate(arr, start=1):
+                sibling_rank[cid] = i
+    sibling_rank.setdefault(root_id, 0)
+
+    # 3) Chronological rank per fork
+    chrono_rank = {}
+    fork_groups = defaultdict(list)
+    for t in tracks:
+        f_idx, _ = parse_version(t.version)
+        fork_groups[f_idx].append(t)
+    for f_idx, arr in fork_groups.items():
+        arr.sort(key=lambda t: (t.created_at, t.id))
+        for i, t in enumerate(arr):
+            chrono_rank[t.id] = i
+
+    # 4) Coordinates with column occupancy (same numbers as patch)
+    X0, Y0 = 120, 640
+    COL_GAP = 160
+    ROW_GAP = 90
+    coords = {}
+    taken_rows = defaultdict(set)
+
+    placement = sorted(tracks, key=lambda t: (parse_version(t.version)[0], t.created_at, t.id))
+    for t in placement:
+        f_idx, _ = parse_version(t.version)
+        base_d = depth.get(t.id, 0)
+        s_rank = sibling_rank.get(t.id, 1)
+        c_rank = chrono_rank.get(t.id, 0)
+        proposed_row = max(base_d + max(0, s_rank - 1), c_rank)
+        while proposed_row in taken_rows[f_idx]:
+            proposed_row += 1
+        taken_rows[f_idx].add(proposed_row)
+        x = X0 + f_idx * COL_GAP
+        y = Y0 - proposed_row * ROW_GAP
+        coords[t.id] = (x, y)
+
+    # 5) Edges
+    edges = []
+    for t in tracks:
+        pred_id = getattr(t.immediate_predecessor, 'id', None)
+        if pred_id and pred_id in coords and t.id in coords:
+            edges.append({'from': pred_id, 'to': t.id})
+
+    # 6) Nodes payload
+    nodes = []
+    for t in tracks:
+        x, y = coords[t.id]
+        f_idx, _ = parse_version(t.version)
+        nodes.append({
+            'id': t.id,
+            'name': t.name,
+            'version': t.version,
+            'downloads': t.downloads,
+            'is_posted': t.is_posted,
+            'uploaded_by': t.uploaded_by.username,
+            'isCurrent': (t.id == current_track.id),
+            'stem': t.stem_id,
+            'immediate_predecessor': getattr(t.immediate_predecessor, 'id', None),
+            'sibling_rank': sibling_rank.get(t.id, 1),
+            'column': f_idx,
+            'x': x,
+            'y': y,
+        })
+
+    return Response({'nodes': nodes, 'edges': edges})
+
 
 class TrackViewSet(viewsets.ModelViewSet):
     serializer_class = TrackSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
     pagination_class = SmallPageNumberPagination
 
     def get_queryset(self):
@@ -367,6 +575,33 @@ class TrackViewSet(viewsets.ModelViewSet):
         track.save(update_fields=['is_posted'])
         return Response({'success': True})
 
+    # Public posted tracks by username
+    @action(detail=False, methods=['get'], url_path=r'posted-by/(?P<username>[^/.]+)')
+    def posted_by(self, request, username=None):
+        user = get_object_or_404(User, username=username)
+        qs = Track.objects.filter(uploaded_by=user, is_posted=True).order_by('-created_at')
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            ser = TrackSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(ser.data)
+        ser = TrackSerializer(qs, many=True, context={'request': request})
+        return Response(ser.data)
+
+    # Saved = user's own unposted tracks (private; mirrors patches.saved_by)
+    @action(detail=False, methods=['get'], url_path=r'saved-by/(?P<username>[^/.]+)')
+    def saved_by(self, request, username=None):
+        owner = get_object_or_404(User, username=username)
+        if request.user != owner:
+            return Response({'detail': 'Forbidden'}, status=403)
+        qs = Track.objects.filter(uploaded_by=owner, is_posted=False).order_by('-created_at')
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            ser = TrackSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(ser.data)
+        ser = TrackSerializer(qs, many=True, context={'request': request})
+        return Response(ser.data)
+
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def fork_track(request, pk):
@@ -381,4 +616,4 @@ def fork_track(request, pk):
     serializer = TrackSerializer(data=data, context={'request': request})
     serializer.is_valid(raise_exception=True)
     track = serializer.save()
-    return Response(TrackSerializer(track).data, status=201)
+    return Response(TrackSerializer(track, context={'request': request}).data, status=201)

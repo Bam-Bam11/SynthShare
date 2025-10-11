@@ -82,6 +82,12 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
   const [osc2Freq, setOsc2Freq] = useState(null);         // Hz; null => follow note
   const [osc2SlideFrom, setOsc2SlideFrom] = useState(null); // Hz; optional glide start
 
+  // Source patch (when editing/forking) — used to send `stem` on save
+  const [sourcePatchId, setSourcePatchId] = useState(null);
+
+  // Latest server-saved patch (to show computed version)
+  const [currentPatch, setCurrentPatch] = useState(null);
+
   /* =========================
      Load patchToLoad (edit/fork)
      ========================= */
@@ -92,6 +98,10 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     try {
       const patch = JSON.parse(patchToLoad);
       const params = patch.parameters || {};
+
+      // Remember the source so saving sends a `stem`
+      // patchdetail writes { stem: patch.id, action: 'edit'|'fork', root, ... }
+      setSourcePatchId(patch.stem || patch.id || null);
 
       // Meta
       setPatchName(patch.name || '');
@@ -200,6 +210,8 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     await Tone.start();
 
     const now = Tone.now();
+    the: {
+    }
     const targetHzFromNote = Tone.Frequency(note).toFrequency();
 
     // Envelope
@@ -303,7 +315,7 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     const desc = (description || '').trim().slice(0, 500);
 
     const parameters = {
-      // New multi‑osc payload
+      // New multi-osc payload
       oscillators: [
         {
           type: oscType,
@@ -344,17 +356,20 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       synth_type: 'tone',
       note,       // still stored for legacy / when frequency is null
       duration,
-      is_posted: false
+      is_posted: false,
+      // CRITICAL: include stem when editing/forking
+      ...(sourcePatchId ? { stem: sourcePatchId } : {})
     };
 
     try {
       const res = await axios.post('http://localhost:8000/api/patches/', payload, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
       });
-      alert('Patch saved successfully!');
+      setCurrentPatch(res.data); // contains server-computed version/root/stem/etc.
+      alert(`Patch saved successfully as v${res.data.version || '0.0'}`);
       console.log('Saved patch response:', res.data);
     } catch (err) {
-      console.error('Error saving patch:', err);
+      console.error('Error saving patch:', err?.response?.status, err?.response?.data || err);
       alert('Failed to save patch.');
     }
   };
@@ -460,6 +475,19 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
   return (
     <div className="p-4 max-w-3xl mx-auto rounded-xl shadow-lg bg-white">
       <h2 className="text-xl font-bold mb-4">Synth Interface</h2>
+
+      {/* Show latest server version if available */}
+      {currentPatch && (
+        <div className="mb-3 p-2 rounded border bg-green-50 text-green-700">
+          Saved as <strong>v{currentPatch.version || '0.0'}</strong>
+          <button
+            className="ml-3 px-2 py-1 text-sm border rounded hover:bg-green-100"
+            onClick={() => navigate(`/patches/${currentPatch.id}`)}
+          >
+            View Lineage
+          </button>
+        </div>
+      )}
 
       {!hideNameAndDescription && (
         <>
