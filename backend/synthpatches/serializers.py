@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist
-from .models import Patch, Follow, Track, TrackItem, SavedTrack
+from .models import Patch, Follow, Track, TrackItem
 
 
 # --------------------------
@@ -165,7 +165,6 @@ class TrackSerializer(serializers.ModelSerializer):
     uploaded_by = serializers.ReadOnlyField(source='uploaded_by.username')
     uploaded_by_id = serializers.ReadOnlyField(source='uploaded_by.id')
     items = TrackItemSerializer(many=True, required=False)
-    is_saved = serializers.SerializerMethodField()
 
     # lineage (mirrors Patch)
     root = serializers.PrimaryKeyRelatedField(queryset=Track.objects.all(), required=False, allow_null=True)
@@ -174,19 +173,13 @@ class TrackSerializer(serializers.ModelSerializer):
         queryset=Track.objects.all(), required=False, allow_null=True
     )
 
-    def get_is_saved(self, obj):
-        req = self.context.get('request')
-        if not req or not req.user or not req.user.is_authenticated:
-            return False
-        return SavedTrack.objects.filter(user=req.user, track=obj).exists()
-
     class Meta:
         model = Track
         fields = [
             'id', 'name', 'description', 'uploaded_by', 'uploaded_by_id',
             'bpm', 'created_at', 'downloads', 'forks',
             'root', 'stem', 'immediate_predecessor', 'version', 'is_posted',
-            'items', 'is_saved'
+            'items'
         ]
         read_only_fields = ['uploaded_by', 'downloads', 'forks', 'created_at', 'version']
 
