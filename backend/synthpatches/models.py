@@ -244,9 +244,17 @@ class Follow(models.Model):
 # Track implementation
 # --------------------------
 
+from django.db import models, transaction
+from django.contrib.auth.models import User
+
 class Track(models.Model):
     name = models.CharField(max_length=120)
+    # Free-form user text (no more timeline data here)
     description = models.TextField(blank=True, default='')
+
+    # NEW: canonical timeline stored here
+    composition = models.JSONField(default=dict, blank=True)
+
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tracks')
     bpm = models.PositiveIntegerField(default=120)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -254,12 +262,10 @@ class Track(models.Model):
     downloads = models.PositiveIntegerField(default=0)
     forks = models.PositiveIntegerField(default=0)
 
-    # lineage (mirror Patch)
     root = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='track_descendants')
     stem = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='track_forks_from')
     immediate_predecessor = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='track_direct_successors')
 
-    # "<fork>.<edit>" in base-32 (digits 0-9, a-v)
     version = models.CharField(max_length=20, blank=True, default='0.0')
     is_posted = models.BooleanField(default=False)
 
@@ -269,18 +275,16 @@ class Track(models.Model):
     def __str__(self):
         return f'{self.name} (v{self.version})'
 
-    # --------------------------
-    # Explicit constructors (mirror Patch)
-    # --------------------------
     @classmethod
     @transaction.atomic
-    def create_root(cls, *, name, uploaded_by, bpm=120, description='', **extra):
+    def create_root(cls, *, name, uploaded_by, bpm=120, description='', composition=None, **extra):
         inst = cls(
             name=name,
             uploaded_by=uploaded_by,
             bpm=bpm,
             description=description,
-            **extra
+            composition=composition or {"version": 1, "items": []},
+            **extra,
         )
         inst.save()
         return inst
@@ -293,11 +297,10 @@ class Track(models.Model):
             name=name,
             uploaded_by=uploaded_by,
             root=root,
-            stem=source,                   # we fork FROM this node
-            immediate_predecessor=source,  # exact parent
-            **extra
+            stem=source,
+            immediate_predecessor=source,
+            **extra,
         )
-        # allow same-user forks by forcing fork path in save()
         inst._force_fork = True
         inst.save()
         return inst
@@ -310,12 +313,14 @@ class Track(models.Model):
             name=name,
             uploaded_by=uploaded_by,
             root=root,
-            stem=source,                   # the exact node we edited
-            immediate_predecessor=source,  # one-step link
-            **extra
+            stem=source,
+            immediate_predecessor=source,
+            **extra,
         )
         inst.save()
         return inst
+
+
 
     # --------------------------
     # Core lineage/versioning (mirror Patch.save)
@@ -457,32 +462,3 @@ class Track(models.Model):
         return (max(fork_indices) + 1) if fork_indices else 1  # after 0.0, first fork is 1.0
 
 
-
-
-class TrackItem(models.Model):
-    """
-    One clip on a lane.
-    Mirrors ComposePanel 'clips' schema: lane (order_index),
-    startBeat/lengthBeats, plus a frozen patch snapshot.
-    """
-    track = models.ForeignKey(Track, on_delete=models.CASCADE, related_name='items')
-
-    # Lane index in the UI (0-based)
-    order_index = models.PositiveIntegerField(default=0)
-
-    # Which patch is referenced, and a frozen copy for reproducibility
-    patch = models.ForeignKey('Patch', on_delete=models.PROTECT)
-    patch_snapshot = models.JSONField()
-
-    # Clip timing in beats (ComposePanel uses fractional beats)
-    start_beat = models.FloatField(default=0.0)
-    length_beats = models.FloatField(default=1.0)
-
-    # Optional display label for the clip
-    label = models.CharField(max_length=120, blank=True, default='')
-
-    class Meta:
-        ordering = ['order_index', 'start_beat', 'id']
-        indexes = [
-            models.Index(fields=['track', 'order_index', 'start_beat']),
-        ]

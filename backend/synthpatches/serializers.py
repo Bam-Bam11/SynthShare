@@ -1,8 +1,10 @@
+from django.db import transaction
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from django.contrib.auth.models import User
-from django.core.exceptions import ObjectDoesNotExist
-from .models import Patch, Follow, Track, TrackItem
+
+from .models import Patch, Follow, Track
 
 
 # --------------------------
@@ -13,7 +15,6 @@ class PatchSerializer(serializers.ModelSerializer):
     uploaded_by = serializers.ReadOnlyField(source='uploaded_by.username')
     uploaded_by_id = serializers.ReadOnlyField(source='uploaded_by.id')
 
-    # Lineage hints (IDs accepted)
     root = serializers.PrimaryKeyRelatedField(queryset=Patch.objects.all(), required=False, allow_null=True)
     stem = serializers.PrimaryKeyRelatedField(queryset=Patch.objects.all(), required=False, allow_null=True)
     immediate_predecessor = serializers.PrimaryKeyRelatedField(
@@ -23,34 +24,16 @@ class PatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Patch
         fields = [
-            'id',
-            'name',
-            'description',
-            'uploaded_by',
-            'uploaded_by_id',
-            'parameters',
-            'synth_type',
-            'note',
-            'duration',
-            'created_at',
-            'downloads',
-            'forks',
-            'root',
-            'stem',
-            'immediate_predecessor',
-            'version',
-            'is_posted',
+            'id', 'name', 'description',
+            'uploaded_by', 'uploaded_by_id',
+            'parameters', 'synth_type', 'note', 'duration',
+            'created_at', 'downloads', 'forks',
+            'root', 'stem', 'immediate_predecessor',
+            'version', 'is_posted',
         ]
-        # Protect server-assigned versioning/lineage
         read_only_fields = ['uploaded_by', 'downloads', 'forks', 'created_at', 'version']
 
     def create(self, validated_data):
-        """
-        Route creation to the correct constructor so version/root/stem/immediate_predecessor are correct:
-          - No root/stem  -> Patch.create_root (0.0)
-          - stem given    -> same-user: Patch.edit_from(source), other-user: Patch.fork_from(source)
-        If only root is given (no stem), treat as edit-from-root.
-        """
         request = self.context.get('request')
         if not request or not request.user or not request.user.is_authenticated:
             raise ValidationError({'detail': 'Authentication required to create a patch.'})
@@ -128,45 +111,16 @@ class FollowSerializer(serializers.ModelSerializer):
 
 
 # --------------------------
-# TRACKS (with nested items)
+# TRACKS (composition JSON)
 # --------------------------
-
-class TrackItemSerializer(serializers.ModelSerializer):
-    # include minimal patch info for UI and the id for linking
-    patch_name = serializers.ReadOnlyField(source='patch.name')
-    patch_uploaded_by = serializers.ReadOnlyField(source='patch.uploaded_by.username')
-
-    class Meta:
-        model = TrackItem
-        fields = [
-            'id',
-            'order_index',
-            'patch',
-            'patch_name',
-            'patch_uploaded_by',
-            'patch_snapshot',
-            'start_beat',
-            'length_beats',
-            'label',
-        ]
-        read_only_fields = ['patch_snapshot']
-
-    def validate(self, attrs):
-        sb = attrs.get('start_beat', 0.0)
-        lb = attrs.get('length_beats', 1.0)
-        if sb < 0:
-            raise ValidationError({'start_beat': 'start_beat must be >= 0.'})
-        if lb <= 0:
-            raise ValidationError({'length_beats': 'length_beats must be > 0.'})
-        return attrs
-
 
 class TrackSerializer(serializers.ModelSerializer):
     uploaded_by = serializers.ReadOnlyField(source='uploaded_by.username')
     uploaded_by_id = serializers.ReadOnlyField(source='uploaded_by.id')
-    items = TrackItemSerializer(many=True, required=False)
 
-    # lineage (mirrors Patch)
+    # Accept/return composition as-is, but validate structure in .validate()
+    composition = serializers.JSONField(required=False)
+
     root = serializers.PrimaryKeyRelatedField(queryset=Track.objects.all(), required=False, allow_null=True)
     stem = serializers.PrimaryKeyRelatedField(queryset=Track.objects.all(), required=False, allow_null=True)
     immediate_predecessor = serializers.PrimaryKeyRelatedField(
@@ -176,18 +130,79 @@ class TrackSerializer(serializers.ModelSerializer):
     class Meta:
         model = Track
         fields = [
-            'id', 'name', 'description', 'uploaded_by', 'uploaded_by_id',
+            'id', 'name', 'description',
+            'composition',
+            'uploaded_by', 'uploaded_by_id',
             'bpm', 'created_at', 'downloads', 'forks',
-            'root', 'stem', 'immediate_predecessor', 'version', 'is_posted',
-            'items'
+            'root', 'stem', 'immediate_predecessor',
+            'version', 'is_posted',
         ]
         read_only_fields = ['uploaded_by', 'downloads', 'forks', 'created_at', 'version']
 
+    # --- schema/consistency checks for composition ---
+    def _validate_composition(self, comp):
+        if comp in (None, {}):
+            return {"version": 1, "items": []}
+
+        if not isinstance(comp, dict):
+            raise ValidationError({'composition': 'Must be an object.'})
+
+        items = comp.get('items')
+        if items is None:
+            comp['items'] = items = []
+
+        if not isinstance(items, list):
+            raise ValidationError({'composition': '"items" must be a list.'})
+
+        # Gather & check IDs and fields
+        patch_ids = []
+        for i, row in enumerate(items):
+            if not isinstance(row, dict):
+                raise ValidationError({'composition': f'Item {i} must be an object.'})
+
+            missing = [k for k in ('patch', 'lane', 'start', 'end') if k not in row]
+            if missing:
+                raise ValidationError({'composition': f'Item {i} missing {missing}.'})
+
+            try:
+                row['patch'] = int(row['patch'])
+                row['lane'] = int(row['lane'])
+                row['start'] = float(row['start'])
+                row['end'] = float(row['end'])
+            except Exception:
+                raise ValidationError({'composition': f'Item {i} has non-numeric fields.'})
+
+            if row['lane'] < 0:
+                raise ValidationError({'composition': f'Item {i}: lane must be >= 0.'})
+            if row['start'] < 0:
+                raise ValidationError({'composition': f'Item {i}: start must be >= 0.'})
+            if row['end'] <= row['start']:
+                raise ValidationError({'composition': f'Item {i}: end must be > start.'})
+
+            if 'label' in row and row['label'] is None:
+                row['label'] = ''
+
+            patch_ids.append(row['patch'])
+
+        # Referential integrity for patches
+        if patch_ids:
+            existing = set(Patch.objects.filter(id__in=patch_ids).values_list('id', flat=True))
+            missing = [pid for pid in patch_ids if pid not in existing]
+            if missing:
+                raise ValidationError({'composition': f'Unknown patch id(s): {missing}'})
+
+        # Normalize version
+        if 'version' not in comp:
+            comp['version'] = 1
+        return comp
+
+    def validate(self, attrs):
+        comp = attrs.get('composition', None)
+        attrs['composition'] = self._validate_composition(comp)
+        return attrs
+
+    @transaction.atomic
     def create(self, validated_data):
-        """
-        Preserve nested TrackItem creation (with patch_snapshot freezing) and
-        route the Track create through lineage-aware constructors.
-        """
         request = self.context.get('request')
         if not request or not request.user or not request.user.is_authenticated:
             raise ValidationError({'detail': 'Authentication required to create a track.'})
@@ -195,9 +210,6 @@ class TrackSerializer(serializers.ModelSerializer):
 
         validated_data.pop('uploaded_by', None)
 
-        items_data = validated_data.pop('items', [])
-
-        # lineage hints (do not trust client for predecessor)
         root = validated_data.pop('root', None)
         source = validated_data.pop('stem', None)
         validated_data.pop('immediate_predecessor', None)
@@ -207,97 +219,29 @@ class TrackSerializer(serializers.ModelSerializer):
                 raise ValidationError({key: f'{key} is required.'})
 
         try:
-            # decide root/edit/fork
             if source is None and root is None:
-                obj = Track.create_root(uploaded_by=user, **validated_data)
+                track = Track.create_root(uploaded_by=user, **validated_data)
             else:
                 if source is None and root is not None:
                     source = root
                 if source is None:
                     raise ValidationError({'stem': 'A valid stem (source track id) is required for edit/fork.'})
                 if source.uploaded_by_id == user.id:
-                    obj = Track.edit_from(source, uploaded_by=user, **validated_data)
+                    track = Track.edit_from(source, uploaded_by=user, **validated_data)
                 else:
-                    obj = Track.fork_from(source, uploaded_by=user, **validated_data)
+                    track = Track.fork_from(source, uploaded_by=user, **validated_data)
 
-            obj.refresh_from_db()  # ensure version/root/stem are current in the response
-
-            # create items (freeze each patch's parameters)
-            for i, item in enumerate(items_data):
-                patch_ref = item.get('patch')
-                patch_id = patch_ref.id if isinstance(patch_ref, Patch) else patch_ref
-                if patch_id is None:
-                    raise ValidationError({'items': f'Item {i}: "patch" is required.'})
-                try:
-                    patch = Patch.objects.get(pk=patch_id)
-                except Patch.DoesNotExist:
-                    raise ValidationError({'items': f'Item {i}: patch id {patch_id} does not exist.'})
-
-                start_beat = item.get('start_beat', 0.0)
-                length_beats = item.get('length_beats', 1.0)
-                label = item.get('label', '')
-
-                if start_beat < 0:
-                    raise ValidationError({'items': f'Item {i}: start_beat must be >= 0.'})
-                if length_beats <= 0:
-                    raise ValidationError({'items': f'Item {i}: length_beats must be > 0.'})
-
-                TrackItem.objects.create(
-                    track=obj,
-                    order_index=item.get('order_index', i),
-                    patch=patch,
-                    patch_snapshot=patch.parameters,
-                    start_beat=start_beat,
-                    length_beats=length_beats,
-                    label=label,
-                )
-
-            return obj
+            track.refresh_from_db()
+            return track
 
         except ValidationError:
             raise
         except Exception as e:
             raise ValidationError({'detail': f'Create failed: {e.__class__.__name__}: {e}'})
 
+    @transaction.atomic
     def update(self, instance, validated_data):
-        """
-        Replace-all strategy for items (same behaviour you had).
-        """
-        items_data = validated_data.pop('items', None)
-
         for attr, val in validated_data.items():
             setattr(instance, attr, val)
         instance.save()
-
-        if items_data is not None:
-            instance.items.all().delete()
-            for i, item in enumerate(items_data):
-                patch_ref = item.get('patch')
-                patch_id = patch_ref.id if isinstance(patch_ref, Patch) else patch_ref
-                if patch_id is None:
-                    raise ValidationError({'items': f'Item {i}: "patch" is required.'})
-                try:
-                    patch = Patch.objects.get(pk=patch_id)
-                except Patch.DoesNotExist:
-                    raise ValidationError({'items': f'Item {i}: patch id {patch_id} does not exist.'})
-
-                start_beat = item.get('start_beat', 0.0)
-                length_beats = item.get('length_beats', 1.0)
-                label = item.get('label', '')
-
-                if start_beat < 0:
-                    raise ValidationError({'items': f'Item {i}: start_beat must be >= 0.'})
-                if length_beats <= 0:
-                    raise ValidationError({'items': f'Item {i}: length_beats must be > 0.'})
-
-                TrackItem.objects.create(
-                    track=instance,
-                    order_index=item.get('order_index', i),
-                    patch=patch,
-                    patch_snapshot=patch.parameters,
-                    start_beat=start_beat,
-                    length_beats=length_beats,
-                    label=label,
-                )
-
         return instance

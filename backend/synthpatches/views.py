@@ -1,18 +1,24 @@
-from rest_framework import viewsets, permissions, filters
-from rest_framework.generics import get_object_or_404
-from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.response import Response
+from collections import defaultdict, deque
+import random
+
 from django.contrib.auth.models import User
+from django.db.models import Q
+
+from rest_framework import viewsets, permissions, filters, status
+from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework.generics import get_object_or_404
+from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
+
 from .models import Patch, Follow, Track
 from .serializers import PatchSerializer, UserSerializer, FollowSerializer, TrackSerializer
-import random
 from .pagination import SmallPageNumberPagination
-from django.db.models import Q
-from collections import defaultdict, deque
 
 
-# PATCH API VIEWSET
+# --------------------------
+# PATCHES
+# --------------------------
+
 class PatchViewSet(viewsets.ModelViewSet):
     serializer_class = PatchSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
@@ -65,7 +71,7 @@ class PatchViewSet(viewsets.ModelViewSet):
         user = get_object_or_404(User, username=username)
         if request.user != user:
             return Response({'detail': 'Forbidden'}, status=403)
-        qs = Patch.objects.filter(uploaded_by=user, is_posted=False).order_by('-updated_at')
+        qs = Patch.objects.filter(uploaded_by=user, is_posted=False).order_by('-created_at')
         page = self.paginate_queryset(qs)
         if page is not None:
             serializer = PatchSerializer(page, many=True, context={'request': request})
@@ -80,7 +86,7 @@ def post_patch(request, pk):
     try:
         patch = Patch.objects.get(pk=pk, uploaded_by=request.user)
         patch.is_posted = True
-        patch.save()
+        patch.save(update_fields=['is_posted'])
         return Response({'success': 'Patch has been posted.'})
     except Patch.DoesNotExist:
         return Response({'error': 'Patch not found or not owned by user.'}, status=404)
@@ -92,13 +98,16 @@ def unpost_patch(request, pk):
     try:
         patch = Patch.objects.get(pk=pk, uploaded_by=request.user)
         patch.is_posted = False
-        patch.save()
+        patch.save(update_fields=['is_posted'])
         return Response({'success': 'Patch has been unposted.'})
     except Patch.DoesNotExist:
         return Response({'error': 'Patch not found or not owned by user.'}, status=404)
 
 
-# USER VIEWSET — for search by username
+# --------------------------
+# USERS / FOLLOWS
+# --------------------------
+
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = User.objects.all().order_by('username')
     serializer_class = UserSerializer
@@ -107,7 +116,6 @@ class UserViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = 'username'
 
 
-# USER REGISTRATION ENDPOINT
 @api_view(['POST'])
 def register(request):
     username = request.data.get('username')
@@ -124,7 +132,6 @@ def register(request):
     return Response({'message': 'User created successfully'}, status=201)
 
 
-# USER DETAIL BY USERNAME ENDPOINT
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])  # allow viewing profiles without login
 def get_user_by_username(request, username):
@@ -148,7 +155,6 @@ def get_user_by_username(request, username):
     })
 
 
-# Followers of a given username
 @api_view(['GET'])
 def followers_of_user(request, username):
     try:
@@ -162,7 +168,6 @@ def followers_of_user(request, username):
     return Response({'username': target.username, 'count': len(data), 'users': data})
 
 
-# Following for a given username
 @api_view(['GET'])
 def following_of_user(request, username):
     try:
@@ -176,7 +181,6 @@ def following_of_user(request, username):
     return Response({'username': target.username, 'count': len(data), 'users': data})
 
 
-# NEW: CURRENT USER INFO ENDPOINT (/users/me/)
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def current_user_view(request):
@@ -184,14 +188,12 @@ def current_user_view(request):
     return Response(serializer.data)
 
 
-# PROTECTED EXAMPLE VIEW
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def protected_view(request):
     return Response({'message': f'Hello, {request.user.username}! This is a protected endpoint.'})
 
 
-# FOLLOW VIEWSET — for follow/unfollow logic
 class FollowViewSet(viewsets.ModelViewSet):
     queryset = Follow.objects.all()  # Required for DRF routing
     serializer_class = FollowSerializer
@@ -216,7 +218,10 @@ class FollowViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Not following this user.'}, status=404)
 
 
-# FEED VIEW — shows recent posted patches from followed users (paginated)
+# --------------------------
+# FEED / RANDOM
+# --------------------------
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def feed_view(request):
@@ -241,18 +246,15 @@ def random_posted_patch(request):
     return Response(serializer.data)
 
 
+# --------------------------
+# PATCH LINEAGE
+# --------------------------
+
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
 def lineage_view(request, pk):
     """
     Patch lineage graph payload.
-    Layout:
-      - Columns (x): fork index (base-32 'x' in 'x.y')
-      - Row (y): max(
-            baseline depth from root via immediate_predecessor + (sibling_rank-1),
-            chronological rank within the fork column
-        ), then bumped up if occupied.
-      - Edges: immediate_predecessor -> node
     """
     try:
         current_patch = Patch.objects.select_related('uploaded_by', 'root', 'immediate_predecessor').get(pk=pk)
@@ -261,7 +263,6 @@ def lineage_view(request, pk):
 
     root = current_patch.root or current_patch
 
-    # Visibility rules
     if request.user.id == current_patch.uploaded_by_id:
         visible_q = Q(root=root)
     else:
@@ -289,7 +290,6 @@ def lineage_view(request, pk):
 
     by_id = {p.id: p for p in patches}
 
-    # Build adjacency for BFS depth (pred -> [children])
     children = defaultdict(list)
     for p in patches:
         pred_id = getattr(p.immediate_predecessor, 'id', None)
@@ -298,7 +298,6 @@ def lineage_view(request, pk):
 
     root_id = root.id
 
-    # 1) Baseline depth via BFS
     depth = {root_id: 0}
     q = deque([root_id])
     while q:
@@ -308,7 +307,6 @@ def lineage_view(request, pk):
                 depth[cid] = depth[cur] + 1
                 q.append(cid)
 
-    # 2) Sibling rank per (predecessor, fork column)
     sibling_rank = {}
     for pred_id, kids in children.items():
         groups = defaultdict(list)
@@ -321,7 +319,6 @@ def lineage_view(request, pk):
                 sibling_rank[cid] = i
     sibling_rank.setdefault(root_id, 0)
 
-    # 3) Chronological rank per fork (monotonic upward by creation time)
     chrono_rank = {}
     fork_groups = defaultdict(list)
     for p in patches:
@@ -332,7 +329,6 @@ def lineage_view(request, pk):
         for i, p in enumerate(arr):
             chrono_rank[p.id] = i
 
-    # 4) Coordinates with column occupancy
     X0, Y0 = 120, 640
     COL_GAP = 160
     ROW_GAP = 90
@@ -361,14 +357,12 @@ def lineage_view(request, pk):
         y = Y0 - proposed_row * ROW_GAP
         coords[p.id] = (x, y)
 
-    # 5) Edges
     edges = []
     for p in patches:
         pred_id = getattr(p.immediate_predecessor, 'id', None)
         if pred_id and pred_id in coords and p.id in coords:
             edges.append({'from': pred_id, 'to': p.id})
 
-    # 6) Nodes payload
     nodes = []
     for p in patches:
         x, y = coords[p.id]
@@ -392,7 +386,10 @@ def lineage_view(request, pk):
     return Response({'nodes': nodes, 'edges': edges})
 
 
-# === NEW: TRACK LINEAGE VIEW ===
+# --------------------------
+# TRACKS
+# --------------------------
+
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
 def track_lineage_view(request, pk):
@@ -406,7 +403,6 @@ def track_lineage_view(request, pk):
 
     root = current_track.root or current_track
 
-    # Visibility: owner sees all; others see posted + the path to current
     if request.user.id == current_track.uploaded_by_id:
         visible_q = Q(root=root)
     else:
@@ -434,7 +430,6 @@ def track_lineage_view(request, pk):
 
     by_id = {t.id: t for t in tracks}
 
-    # children adjacency for BFS depth
     children = defaultdict(list)
     for t in tracks:
         pred_id = getattr(t.immediate_predecessor, 'id', None)
@@ -443,7 +438,6 @@ def track_lineage_view(request, pk):
 
     root_id = root.id
 
-    # 1) BFS depth from root
     depth = {root_id: 0}
     q = deque([root_id])
     while q:
@@ -453,7 +447,6 @@ def track_lineage_view(request, pk):
                 depth[cid] = depth[cur] + 1
                 q.append(cid)
 
-    # 2) Sibling rank per (predecessor, fork column)
     sibling_rank = {}
     for pred_id, kids in children.items():
         groups = defaultdict(list)   # fork_idx -> [child_id]
@@ -466,7 +459,6 @@ def track_lineage_view(request, pk):
                 sibling_rank[cid] = i
     sibling_rank.setdefault(root_id, 0)
 
-    # 3) Chronological rank per fork
     chrono_rank = {}
     fork_groups = defaultdict(list)
     for t in tracks:
@@ -477,7 +469,6 @@ def track_lineage_view(request, pk):
         for i, t in enumerate(arr):
             chrono_rank[t.id] = i
 
-    # 4) Coordinates with column occupancy (same numbers as patch)
     X0, Y0 = 120, 640
     COL_GAP = 160
     ROW_GAP = 90
@@ -498,14 +489,12 @@ def track_lineage_view(request, pk):
         y = Y0 - proposed_row * ROW_GAP
         coords[t.id] = (x, y)
 
-    # 5) Edges
     edges = []
     for t in tracks:
         pred_id = getattr(t.immediate_predecessor, 'id', None)
         if pred_id and pred_id in coords and t.id in coords:
             edges.append({'from': pred_id, 'to': t.id})
 
-    # 6) Nodes payload
     nodes = []
     for t in tracks:
         x, y = coords[t.id]
@@ -546,67 +535,66 @@ class TrackViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(uploaded_by__id=uploaded_by, is_posted=True)
         else:
             qs = qs.filter(is_posted=True)
-        return qs
 
-    def perform_create(self, serializer):
-        serializer.save(uploaded_by=self.request.user)
+        return qs.select_related('uploaded_by')
 
     def get_object(self):
-        track = get_object_or_404(Track, pk=self.kwargs['pk'])
+        qs = Track.objects.select_related('uploaded_by')
+        track = get_object_or_404(qs, pk=self.kwargs['pk'])
         if track.uploaded_by != self.request.user and not track.is_posted:
             self.permission_denied(self.request, message='This track is not publicly available.')
         return track
 
+    # POST /tracks/<id>/post/
     @action(detail=True, methods=['post'])
     def post(self, request, pk=None):
-        track = self.get_object()
-        if track.uploaded_by != request.user:
-            return Response({'error': 'Not your track.'}, status=403)
-        track.is_posted = True
-        track.save(update_fields=['is_posted'])
-        return Response({'success': True})
+        track = get_object_or_404(Track.objects.select_related('uploaded_by'), pk=pk)
+        if track.uploaded_by_id != request.user.id:
+            return Response({'detail': 'Only the owner can post this track.'}, status=status.HTTP_403_FORBIDDEN)
+        if not track.is_posted:
+            track.is_posted = True
+            track.save(update_fields=['is_posted'])
+        data = self.get_serializer(track, context={'request': request}).data
+        return Response(data)
 
+    # POST /tracks/<id>/unpost/
     @action(detail=True, methods=['post'])
     def unpost(self, request, pk=None):
-        track = self.get_object()
-        if track.uploaded_by != request.user:
-            return Response({'error': 'Not your track.'}, status=403)
-        track.is_posted = False
-        track.save(update_fields=['is_posted'])
-        return Response({'success': True})
+        track = get_object_or_404(Track.objects.select_related('uploaded_by'), pk=pk)
+        if track.uploaded_by_id != request.user.id:
+            return Response({'detail': 'Only the owner can unpost this track.'}, status=status.HTTP_403_FORBIDDEN)
+        if track.is_posted:
+            track.is_posted = False
+            track.save(update_fields=['is_posted'])
+        data = self.get_serializer(track, context={'request': request}).data
+        return Response(data)
 
-    # Public posted tracks by username
+    # GET /tracks/posted-by/<username>/?page=1&page_size=12
     @action(detail=False, methods=['get'], url_path=r'posted-by/(?P<username>[^/.]+)')
     def posted_by(self, request, username=None):
         user = get_object_or_404(User, username=username)
         qs = Track.objects.filter(uploaded_by=user, is_posted=True).order_by('-created_at')
         page = self.paginate_queryset(qs)
-        if page is not None:
-            ser = TrackSerializer(page, many=True, context={'request': request})
-            return self.get_paginated_response(ser.data)
-        ser = TrackSerializer(qs, many=True, context={'request': request})
-        return Response(ser.data)
+        ser = TrackSerializer(page or qs, many=True, context={'request': request})
+        return self.get_paginated_response(ser.data) if page is not None else Response(ser.data)
 
-    # Saved = user's own unposted tracks (private; mirrors patches.saved_by)
+    # GET /tracks/saved-by/<username>/?page=1&page_size=12
     @action(detail=False, methods=['get'], url_path=r'saved-by/(?P<username>[^/.]+)')
     def saved_by(self, request, username=None):
-        owner = get_object_or_404(User, username=username)
-        if request.user != owner:
-            return Response({'detail': 'Forbidden'}, status=403)
-        qs = Track.objects.filter(uploaded_by=owner, is_posted=False).order_by('-created_at')
+        user = get_object_or_404(User, username=username)
+        if request.user != user:
+            return Response({'detail': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+        qs = Track.objects.filter(uploaded_by=user, is_posted=False).order_by('-created_at')
         page = self.paginate_queryset(qs)
-        if page is not None:
-            ser = TrackSerializer(page, many=True, context={'request': request})
-            return self.get_paginated_response(ser.data)
-        ser = TrackSerializer(qs, many=True, context={'request': request})
-        return Response(ser.data)
+        ser = TrackSerializer(page or qs, many=True, context={'request': request})
+        return self.get_paginated_response(ser.data) if page is not None else Response(ser.data)
 
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def fork_track(request, pk):
     """
-    Create a new Track as a fork of pk. Client may optionally pass a mutated items array.
+    Create a new Track as a fork of pk. Client may optionally pass a mutated composition/items payload.
     """
     parent = get_object_or_404(Track, pk=pk)
     data = request.data.copy()
