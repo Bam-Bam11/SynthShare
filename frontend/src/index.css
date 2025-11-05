@@ -14,3 +14,10 @@ code {
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Base light/dark backgrounds (you can expand this later) */
+.theme-light body { background: #ffffff; color: #111; }
+.theme-dark  body { background: #0b0b0b; color: #f5f5f5; }
+
+/* Ensure app can fill the viewport; remove default margins */
+html, body, #root { height: 100%; margin: 0; }

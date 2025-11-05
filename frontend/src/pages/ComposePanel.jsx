@@ -1,9 +1,10 @@
 // src/pages/ComposePanel.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import * as Tone from 'tone';
 import { useChannelRack } from '../context/ChannelRackContext';
 import PlayPatch from '../components/PlayPatch';
-import API from '../api'; // central axios helper
+import API from '../api';
 
 // ---- constants ----
 const LANES_MIN = 8;
@@ -12,7 +13,20 @@ const LANE_GUTTER = 220;            // space for name/color + M/S buttons
 const INITIAL_PX_PER_BEAT = 60;     // pixels per beat (zoom)
 const DEFAULT_BPM = 120;
 const DEFAULT_BEATS = 64;           // visible beats
-const DRAFT_KEY = 'trackDraft_v6';  // bump on schema changes
+const DRAFT_KEY = 'trackDraft_v9';  // bump on schema changes
+
+// Server mount points (resolved via axios baseURL)
+const PATCH_BASES = ['/patches/'];
+const TRACK_BASES = ['/tracks/'];
+
+// ---- shared button styles (match SynthInterface buttons) ----
+const BTN = {
+  play: 'px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600',
+  save: 'px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600',
+  post: 'px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600',
+  download: 'px-4 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600',
+  disabled: 'opacity-60 cursor-not-allowed',
+};
 
 // ---- helpers ----
 const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
@@ -26,17 +40,45 @@ const fmtTime = (seconds) => {
 const snap16 = (beats) => Math.max(0, Math.round(beats * 4) / 4); // 1/16 note
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-// serialisable patch summary only (for persistence)
+// Extract a patch id from various shapes we might see
+const getPatchId = (p) => {
+  if (!p) return null;
+  if (typeof p === 'number') return p;
+  if (typeof p === 'string' && /^\d+$/.test(p)) return Number(p);
+  const direct =
+    p.id ?? p.patch_id ?? p.patchId ?? p._id ??
+    (typeof p.patch === 'number' ? p.patch : null) ??
+    (typeof p.patch === 'string' && /^\d+$/.test(p.patch) ? Number(p.patch) : null) ??
+    (p.patch && (p.patch.id ?? p.patch.patch_id ?? p.patch.patchId ?? p.patch._id));
+  return (typeof direct === 'number' || typeof direct === 'string') ? Number(direct) : null;
+};
+
+// serialisable patch summary only (for persistence & quick labels)
 const toSerializablePatch = (p) => {
   if (!p) return null;
-  const { id, name, displayName, note, duration, parameters, params } = p;
+  const id = getPatchId(p);
   return {
     id: id ?? null,
-    name: name ?? null,
-    displayName: displayName ?? null,
-    note: note ?? 'C4',
-    duration: duration ?? '8n',
-    parameters: parameters ?? params ?? null,
+    name: p.name ?? p.displayName ?? null,
+    displayName: p.displayName ?? null,
+    note: p.note ?? 'C4',
+    duration: p.duration ?? '8n',
+    parameters: p.parameters ?? p.params ?? null,
+  };
+};
+
+// Normalise any server Patch payload into what PlayPatch/UI expect
+const normalizeServerPatch = (p, idOverride = null) => {
+  const id = idOverride ?? getPatchId(p) ?? null;
+  const nameLike = p?.displayName ?? p?.name ?? p?.title ?? null;
+  const params = p?.parameters ?? p?.params ?? p?.patch_snapshot ?? null;
+  return {
+    id,
+    name: nameLike ?? (id != null ? `Patch ${id}` : null),
+    displayName: nameLike ?? undefined,
+    note: p?.note || 'C4',
+    duration: p?.duration || '8n',
+    parameters: params,
   };
 };
 
@@ -45,7 +87,7 @@ const loadDraft = () => {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
     return raw ? JSON.parse(raw) : null;
-  } catch (e) {
+  } catch {
     return null;
   }
 };
@@ -83,32 +125,56 @@ async function fetchAllPatchesForUser(uid, basePath = '/patches/') {
 
 async function loadUserPatches() {
   const uid = await getCurrentUserId();
-  try { return await fetchAllPatchesForUser(uid, '/patches/'); }
-  catch (e) { return await fetchAllPatchesForUser(uid, '/api/patches/'); }
+  for (const base of PATCH_BASES) {
+    try { return await fetchAllPatchesForUser(uid, base); }
+    catch { /* try next base */ }
+  }
+  return [];
 }
+
+async function fetchTrackById(trackId) {
+  for (const base of TRACK_BASES) {
+    try {
+      const { data } = await API.get(`${base}${trackId}/`);
+      return data; // composition-based now
+    } catch { /* try next base */ }
+  }
+  throw new Error('Could not fetch track');
+}
+
+async function fetchPatchById(id) {
+  for (const base of PATCH_BASES) {
+    try {
+      const { data } = await API.get(`${base}${id}/`);
+      return data;
+    } catch { /* try next base */ }
+  }
+  throw new Error('Patch not found');
+}
+
 // -----------------------------------------------------------------
 
 export default function ComposePanel() {
-  // Defensive Channel Rack hook
+  // Channel Rack
   const rack = useChannelRack();
   const channels = Array.isArray(rack.channels) ? rack.channels : [];
 
   const draft = loadDraft();
 
   // ---- core timeline state ----
-  const [bpm, setBpm] = useState(() =>
+  const [bpm, setBpm] = useState(
     typeof draft?.bpm === 'number' ? draft.bpm : DEFAULT_BPM
   );
-  const [lanes, setLanes] = useState(() =>
+  const [lanes, setLanes] = useState(
     typeof draft?.lanes === 'number' ? Math.max(LANES_MIN, draft.lanes) : LANES_MIN
   );
-  const [pxPerBeat, setPxPerBeat] = useState(() =>
+  const [pxPerBeat, setPxPerBeat] = useState(
     typeof draft?.pxPerBeat === 'number' ? Math.max(10, draft.pxPerBeat) : INITIAL_PX_PER_BEAT
   );
-  const [lengthBeats, setLengthBeats] = useState(() =>
+  const [lengthBeats, setLengthBeats] = useState(
     typeof draft?.lengthBeats === 'number' ? Math.max(1, draft.lengthBeats) : DEFAULT_BEATS
   );
-  const [clips, setClips] = useState(() =>
+  const [clips, setClips] = useState(
     Array.isArray(draft?.clips) ? draft.clips : []
   );
 
@@ -118,10 +184,22 @@ export default function ComposePanel() {
     return Array.from({ length: Math.max(lanes, arr.length || 0) }).map((_, i) => arr[i] ?? defaultLaneMeta(i));
   });
 
-  // project meta + save
+  // project meta + save/post
   const [projectName, setProjectName] = useState(draft?.projectName || 'Untitled');
+  const [projectDesc, setProjectDesc] = useState(draft?.projectDesc || ''); // user-facing description
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState('');
+  const [posting, setPosting] = useState(false);
+  const [trackId, setTrackId] = useState(null);
+  const [isPosted, setIsPosted] = useState(false);
+
+  // If we came from /tracks/:id/edit, capture the id from route
+  const { id: routeTrackId } = useParams();
+  useEffect(() => {
+    if (routeTrackId) setTrackId(routeTrackId);
+  }, [routeTrackId]);
+
+  // Keep lineage hints between saves (root/stem)
+  const lineageRef = useRef({ root: null, stem: null });
 
   // ensure laneMeta size follows lanes
   useEffect(() => {
@@ -139,14 +217,75 @@ export default function ComposePanel() {
         DRAFT_KEY,
         JSON.stringify({
           projectName,
+          projectDesc,
           bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta
         })
       );
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn('Failed to save track draft', e);
     }
-  }, [projectName, bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta]);
+  }, [projectName, projectDesc, bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta]);
+
+  // ---- load seed from TrackDetail (fork/edit) and capture lineage ----
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('trackToLoad');
+      if (!raw) return;
+      const seed = JSON.parse(raw);
+
+      if (seed.name) setProjectName(seed.name);
+      if (typeof seed.bpm === 'number') setBpm(seed.bpm);
+      if (typeof seed.description === 'string') setProjectDesc(seed.description);
+
+      // Prefer composition.clips if present, else (temporary) items
+      let clipsFromSeed = [];
+      if (seed && typeof seed.composition === 'object' && Array.isArray(seed.composition?.clips)) {
+        clipsFromSeed = seed.composition.clips.map((row, i) => {
+          const start = Number((row.start ?? row.start_beat) ?? 0);
+          const end = Number((row.end ?? row.end_beat) ?? start);
+          const pid = getPatchId(row.patch ?? row.patch_id);
+          return {
+            id: `seedc-${i}-${Date.now()}`,
+            lane: Number(row.lane ?? i),
+            startBeat: start,
+            lengthBeats: Math.max(0.25, end - start),
+            label: `Patch ${pid ?? ''}`.trim(),
+            patch: { id: pid || null },
+          };
+        });
+      } else if (Array.isArray(seed.items) && seed.items.length) {
+        clipsFromSeed = seed.items.map((it, i) => ({
+          id: `seedi-${i}-${Date.now()}`,
+          lane: Number(it.order_index ?? i),
+          startBeat: Number(it.start_beat ?? 0),
+          lengthBeats: Math.max(0.25, Number(it.length_beats ?? 1)),
+          label: it.label || `Lane ${Number(it.order_index ?? i) + 1}`,
+          patch: {
+            id: getPatchId(it.patch ?? it.patch_id ?? it),
+            name: it.patch_name || (getPatchId(it.patch ?? it.patch_id ?? it) ? `Patch ${getPatchId(it.patch ?? it.patch_id ?? it)}` : null),
+            parameters: it.patch_snapshot ?? null,
+          },
+        }));
+      }
+
+      if (clipsFromSeed.length) {
+        const maxLane = Math.max(LANES_MIN, ...clipsFromSeed.map(c => c.lane + 1));
+        const lastEnd = Math.max(0, ...clipsFromSeed.map(c => c.startBeat + c.lengthBeats));
+        setLanes(maxLane);
+        if (lastEnd > lengthBeats) setLengthBeats(Math.ceil(lastEnd));
+        setClips(clipsFromSeed);
+      }
+
+      lineageRef.current = {
+        root: seed.root ?? null,
+        stem: seed.stem ?? null,
+      };
+    } catch {}
+    finally {
+      try { localStorage.removeItem('trackToLoad'); } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---- derived layout/time ----
   const secPerBeat = 60 / bpm;
@@ -207,6 +346,7 @@ export default function ComposePanel() {
   // hover readout
   const onMouseMoveGrid = (e) => {
     const grid = e.currentTarget;
+    candles(); // keep React hooks discipline happy (no-op)
     const rect = grid.getBoundingClientRect();
     const xInGrid = e.clientX - rect.left + grid.scrollLeft - LANE_GUTTER;
     const beat = xInGrid / pxPerBeat;
@@ -222,6 +362,7 @@ export default function ComposePanel() {
   // ---- Import (no BPM), with mapping ----
   const [showImportMap, setShowImportMap] = useState(false);
   const [importMap, setImportMap] = useState({});
+
   useEffect(() => {
     if (!showImportMap) return;
     const defaults = {};
@@ -229,6 +370,7 @@ export default function ComposePanel() {
     setImportMap(defaults);
   }, [showImportMap, channels, lanes]);
 
+  // APPEND imported patches; do not clear existing
   const doImportMapped = () => {
     if (!channels.length) {
       alert('No Channel Rack content to import.');
@@ -254,6 +396,11 @@ export default function ComposePanel() {
         const startBeat = stepIndex / 4;
         const lengthBeatsLocal = 1 / 4;
 
+        const patchSer = toSerializablePatch(ch.patch);
+        if (!patchSer?.id) {
+          console.warn('Channel Rack patch missing id at rack', rackIdx, 'step', stepIndex, ch.patch);
+        }
+
         newClips.push({
           id: `${targetLane}-${stepIndex}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
           lane: targetLane,
@@ -263,7 +410,7 @@ export default function ComposePanel() {
             ch.patch?.displayName ||
             ch.patch?.name ||
             (laneMeta?.[targetLane]?.name ?? `Ch ${targetLane + 1}`),
-          patch: toSerializablePatch(ch.patch),
+          patch: patchSer,
         });
       });
     });
@@ -274,18 +421,21 @@ export default function ComposePanel() {
       return;
     }
 
-    const lastEndBeat = Math.max(...newClips.map(c => c.startBeat + c.lengthBeats));
-    if (lastEndBeat > lengthBeats) setLengthBeats(Math.ceil(lastEndBeat));
+    setClips((prev) => {
+      const merged = [...prev, ...newClips];
+      const lastEndBeat = Math.max(0, ...merged.map(c => c.startBeat + c.lengthBeats));
+      setLengthBeats((lb) => Math.max(lb, Math.ceil(lastEndBeat)));
+      const maxLaneIdx = Math.max(-1, ...merged.map(c => c.lane));
+      setLanes((ln) => Math.max(ln, maxLaneIdx + 1, LANES_MIN));
+      return merged;
+    });
 
-    setLanes(Math.max(LANES_MIN, maxLane));
-    setClips(newClips);
     setShowImportMap(false);
   };
 
-  // optional quick import (1:1 lanes) — function kept
+  // APPEND quick import (1:1 lanes)
   const quickImportAll = () => {
     if (!channels.length) return;
-
     const newClips = [];
     let maxLane = lanes;
 
@@ -296,22 +446,32 @@ export default function ComposePanel() {
 
       ch.steps.forEach((on, stepIndex) => {
         if (!on) return;
+
+        const patchSer = toSerializablePatch(ch.patch);
+        if (!patchSer?.id) {
+          console.warn('Channel Rack patch missing id at lane', lane, 'step', stepIndex, ch.patch);
+        }
+
         newClips.push({
           id: `${lane}-${stepIndex}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
           lane,
           startBeat: stepIndex / 4,
           lengthBeats: 1 / 4,
           label: ch.patch?.displayName || ch.patch?.name || `Ch ${lane + 1}`,
-          patch: toSerializablePatch(ch.patch),
+          patch: patchSer,
         });
       });
     });
 
     if (newClips.length) {
-      const lastEnd = Math.max(...newClips.map(c => c.startBeat + c.lengthBeats));
-      if (lastEnd > lengthBeats) setLengthBeats(Math.ceil(lastEnd));
-      setLanes(Math.max(LANES_MIN, maxLane));
-      setClips(newClips);
+      setClips((prev) => {
+        const merged = [...prev, ...newClips];
+        const lastEnd = Math.max(0, ...merged.map(c => c.startBeat + c.lengthBeats));
+        setLengthBeats((lb) => Math.max(lb, Math.ceil(lastEnd)));
+        const maxLaneIdx = Math.max(-1, ...merged.map(c => c.lane));
+        setLanes((ln) => Math.max(ln, maxLaneIdx + 1, LANES_MIN));
+        return merged;
+      });
     } else {
       alert('Nothing to import (no active steps found).');
     }
@@ -343,9 +503,10 @@ export default function ComposePanel() {
       setPlayheadBeat(0);
       try { transport.seconds = 0; } catch (e) {}
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loopEnabled, loopRegion]);
 
+  // ===== CHANGED: scheduleAndStart with just-in-time enrichment =====
   const scheduleAndStart = async () => {
     await Tone.start();
     const transport = Tone.getTransport();
@@ -363,24 +524,63 @@ export default function ComposePanel() {
       transport.loopEnd = lengthBeats * secPerBeat; // seconds
     }
 
+    // Determine playable clips (mute/solo aware)
     const anySolo = laneMeta.some(m => m.solo);
-    clips.forEach((clip) => {
+    const playable = clips.filter((clip) => {
       const lane = laneMeta[clip.lane];
       const lanePlayable = lane && (anySolo ? lane.solo : !lane.mute);
-      if (!lanePlayable) return;
-      if (!clip.patch) return;
+      return lanePlayable && getPatchId(clip.patch) != null;
+    });
+
+    // Just-in-time enrichment: fetch any patches missing parameters or a name
+    const idsNeeded = Array.from(new Set(playable.map(c => getPatchId(c.patch))));
+    const missingIds = idsNeeded.filter(id => {
+      const clip = playable.find(c => getPatchId(c.patch) === id);
+      return !(clip?.patch?.parameters) || !(clip?.patch?.name || clip?.patch?.displayName);
+    });
+
+    let enrichMap = new Map();
+    if (missingIds.length) {
+      const fetched = await Promise.allSettled(missingIds.map(id => fetchPatchById(id)));
+      fetched.forEach((res, i) => {
+        const id = missingIds[i];
+        if (res.status === 'fulfilled' && res.value) {
+          enrichMap.set(id, normalizeServerPatch(res.value, id));
+        }
+      });
+
+      if (enrichMap.size) {
+        // Update state so UI labels also improve
+        setClips(prev =>
+          prev.map(c => {
+            const id = getPatchId(c.patch);
+            return enrichMap.has(id) ? { ...c, patch: enrichMap.get(id) } : c;
+          })
+        );
+      }
+    }
+
+    // Schedule all playable clips with resolved parameters
+    playable.forEach((clip) => {
+      const pid = getPatchId(clip.patch);
+      const resolved =
+        clip.patch?.parameters
+          ? clip.patch
+          : (enrichMap.get(pid) ?? { ...clip.patch }); // if enrichment failed, still try
+
+      if (!resolved?.parameters) return; // cannot play without a synth snapshot
 
       const triggerAtSec = clip.startBeat * secPerBeat;
       transport.schedule((time) => {
         try {
           PlayPatch({
-            ...clip.patch,
-            note: clip.patch?.note || 'C4',
-            duration: clip.patch?.duration || '8n',
+            ...resolved,
+            // ensure sane defaults
+            note: resolved.note || 'C4',
+            duration: resolved.duration || '8n',
           }, time);
         } catch (e) {
-          // eslint-disable-next-line no-console
-          console.warn('PlayPatch failed for clip', clip, e);
+          console.warn('PlayPatch failed for patch', clip, e);
         }
       }, triggerAtSec);
     });
@@ -413,12 +613,8 @@ export default function ComposePanel() {
       let followBeat;
 
       if (!looping) {
-        // stop at end, reset UI
         if (secNow >= trackEndSec - 0.001) {
-          try {
-            transport.stop();
-            transport.seconds = 0;
-          } catch (e) {}
+          try { transport.stop(); transport.seconds = 0; } catch (e) {}
           setIsPlaying(false);
           setPlayheadBeat(0);
           cancelAnimationFrame(rafRef.current);
@@ -450,9 +646,8 @@ export default function ComposePanel() {
       rafRef.current = requestAnimationFrame(tick);
     };
 
-    // kick off RAF loop and close function
     rafRef.current = requestAnimationFrame(tick);
-  }; // <-- end scheduleAndStart
+  };
 
   const togglePlay = async () => {
     if (isPlaying) {
@@ -467,10 +662,54 @@ export default function ComposePanel() {
   const stop = () => {
     const t = Tone.getTransport();
     t.stop();
-    t.seconds = loopEnabled && loopRegion ? loopRegion.startSec : 0; // keep stop consistent
+    t.seconds = loopEnabled && loopRegion ? loopRegion.startSec : 0;
     setIsPlaying(false);
     setPlayheadBeat(loopEnabled && loopRegion ? loopRegion.startSec / secPerBeat : 0);
     cancelAnimationFrame(rafRef.current);
+  };
+
+  // ---- NEW: Start New Project (clear state) ----
+  const startNewProject = () => {
+    try {
+      const t = Tone.getTransport();
+      t.stop();
+      t.cancel(0);
+    } catch {}
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+
+    // reset UI/transport state
+    setIsPlaying(false);
+    setPlayheadBeat(0);
+    setLoopEnabled(false);
+    setLoopRegion(null);
+    setPickingLoop(false);
+    setPendingLoopPoints([]);
+    setSelectedIds(new Set());
+    setBox(null);
+
+    // reset project settings
+    setProjectName('Untitled');
+    setProjectDesc('');
+    setBpm(DEFAULT_BPM);
+    setPxPerBeat(INITIAL_PX_PER_BEAT);
+    setLengthBeats(DEFAULT_BEATS);
+
+    // reset lanes + meta
+    setLanes(LANES_MIN);
+    setLaneMeta(Array.from({ length: LANES_MIN }, (_, i) => defaultLaneMeta(i)));
+
+    // clear placed patches
+    setClips([]);
+
+    // clear lineage / server link
+    lineageRef.current = { root: null, stem: null };
+    setTrackId(null);
+    setIsPosted(false);
+
+    // clear local persisted draft + any pending seed
+    try { localStorage.removeItem(DRAFT_KEY); } catch {}
+    try { localStorage.removeItem('trackToLoad'); } catch {}
   };
 
   useEffect(() => {
@@ -686,8 +925,8 @@ export default function ComposePanel() {
       return;
     }
 
-    // box select (only if not clicking a clip)
-    if (e.target.getAttribute('data-clip') === '1') return;
+    // box select (only if not clicking a patch tile)
+    if (e.target.getAttribute('data-patch') === '1') return;
     setSelectedIds(new Set());
     setBox({ active: true, x1: e.clientX, y1: e.clientY, x2: e.clientX, y2: e.clientY });
   };
@@ -751,12 +990,11 @@ export default function ComposePanel() {
 
   useEffect(() => {
     loadPatches();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const importPatchIntoLane = () => {
     if (!selectedPatchId) return;
-    const p = patches.find(pp => String(pp.id) === String(selectedPatchId));
+    const p = patches.find(pp => String(getPatchId(pp)) === String(selectedPatchId));
     if (!p) return;
 
     const lane = clamp(Number(selectedImportLane) || 0, 0, Math.max(0, lanes - 1));
@@ -769,26 +1007,51 @@ export default function ComposePanel() {
       laneMeta?.[lane]?.name ||
       `Lane ${lane + 1}`;
 
+    const patchSer = toSerializablePatch(p);
+    if (!patchSer?.id) {
+      console.warn('Selected patch is missing id', p);
+    }
+
     const clip = {
       id: `${lane}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
       lane,
       startBeat: startBeatLocal,
       lengthBeats: lengthBeatsLocal,
       label,
-      patch: toSerializablePatch(p),
+      patch: patchSer,
     };
 
-    setClips(prev => [...prev, clip]);
-
-    const neededBeats = Math.ceil(startBeatLocal + lengthBeatsLocal);
-    if (neededBeats > lengthBeats) setLengthBeats(neededBeats);
-    if (lane + 1 > lanes) setLanes(Math.max(LANES_MIN, lane + 1));
+    setClips(prev => {
+      const merged = [...prev, clip];
+      const neededBeats = Math.ceil(startBeatLocal + lengthBeatsLocal);
+      if (neededBeats > lengthBeats) setLengthBeats(neededBeats);
+      if (lane + 1 > lanes) setLanes(Math.max(LANES_MIN, lane + 1));
+      return merged;
+    });
   };
   // ===== END Import =====
 
-  // ===== Save Project =====
+  // ===== Project persistence & sharing =====
+  const buildCompositionObject = () => ({
+    clips: clips
+      .map((c) => {
+        const patchId = getPatchId(c.patch);
+        if (patchId == null) return null;
+        const start = Number((c.startBeat ?? 0).toFixed(3));
+        const end   = Number(((c.startBeat ?? 0) + (c.lengthBeats ?? 1)).toFixed(3));
+        return {
+          patch: patchId,
+          lane: Number(c.lane ?? 0),
+          start, // beats
+          end,   // beats
+        };
+      })
+      .filter(Boolean)
+  });
+
   const buildProjectPayload = () => ({
     name: projectName,
+    description: projectDesc,
     bpm,
     lengthBeats,
     lanes,
@@ -797,6 +1060,14 @@ export default function ComposePanel() {
     laneMeta,
     loopRegion,
     version: 1
+  });
+
+  // IMPORTANT: send plain text description + composition object now
+  const buildTrackBody = (compositionObj) => ({
+    name: (projectName || 'Untitled').trim(),
+    description: String(projectDesc || ''),
+    bpm,
+    composition: compositionObj || buildCompositionObject(),
   });
 
   const downloadJson = (filename, data) => {
@@ -815,41 +1086,245 @@ export default function ComposePanel() {
     }
   };
 
+  const downloadProject = () => {
+    try {
+      const payload = buildProjectPayload();
+      const fname = `${(projectName || 'project').trim()}.json`;
+      downloadJson(fname, payload);
+    } catch (e) {
+      console.error(e);
+      alert('Could not download project.');
+    }
+  };
+
   const saveProject = async () => {
     setSaving(true);
-    setSaveMsg('');
-    const payload = buildProjectPayload();
+    try {
+      const comp = buildCompositionObject();
+      if (!comp.clips.length) {
+        alert('Nothing to save: add at least one patch.');
+        return;
+      }
 
-    const attempts = [
-      { url: '/projects/', body: { name: projectName, data: payload } },
-      { url: '/api/projects/', body: { name: projectName, data: payload } },
-      { url: '/tracks/', body: { title: projectName, content: payload } },
-      { url: '/api/tracks/', body: { title: projectName, content: payload } },
-    ];
+      let body = buildTrackBody(comp);
 
-    let savedToServer = false;
-    for (const a of attempts) {
+      // Pass lineage like patches: root + stem
+      const lin = lineageRef.current || {};
+      const stem = trackId || lin.stem || null;
+      const root = lin.root || null;
+      if (stem) body.stem = stem;
+      if (root) body.root = root;
+
       try {
-        await API.post(a.url, a.body);
-        setSaveMsg('Saved to server.');
-        savedToServer = true;
-        break;
-      } catch (e) {}
-    }
+        console.log('[save] POST body ->', JSON.parse(JSON.stringify(body)));
+      } catch {
+        console.log('[save] POST body (stringify failed)', body);
+      }
 
-    if (!savedToServer) {
+      let created = null;
+      let lastError = null;
+
+      for (const base of TRACK_BASES) {
+        try {
+          console.log(`[save] trying ${base}`);
+          const { data } = await API.post(base, body);
+          created = data;
+          console.log(`[save] success @ ${base}`, data);
+          break;
+        } catch (e) {
+          lastError = e;
+          const status = e?.response?.status;
+          const payload = e?.response?.data || e?.message;
+          console.warn(`[save] failed @ ${base}`, status, payload);
+        }
+      }
+
+      if (!created?.id) {
+        const serverMsg = lastError?.response?.data || lastError?.message || 'Unknown error';
+        alert(`Server save failed: ${typeof serverMsg === 'string' ? serverMsg : JSON.stringify(serverMsg)}`);
+        throw lastError || new Error('Create failed');
+      }
+
+      // Advance lineage so the next Save keeps incrementing the edit index
+      setTrackId(created.id);
+      setIsPosted(!!created.is_posted);
+      lineageRef.current = {
+        root: root ?? created.root ?? created.id,
+        stem: created.id,
+      };
+
+      const v = created?.version;
+      alert(`Project saved successfully${v != null ? ` as v${v}` : ''}.`);
+    } catch (e) {
+      console.warn('Server save failed, keeping a local copy as backup:', e);
       try {
         const key = `savedProject:${projectName || 'Untitled'}`;
-        localStorage.setItem(key, JSON.stringify(payload));
-        setSaveMsg('Saved locally (and downloaded JSON).');
-      } catch (e) {
-        setSaveMsg('Saved as download only.');
+        localStorage.setItem(key, JSON.stringify(buildProjectPayload()));
+        alert('Server save failed. A local backup was stored. See console for server error details.');
+      } catch {
+        alert('Server save failed and local backup also failed.');
       }
-      downloadJson(`${projectName || 'project'}.json`, payload);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
-  // ===== END Save Project =====
+
+  const postProject = async () => {
+    setPosting(true);
+    try {
+      // ensure we have a node id to post
+      let idToPost = trackId;
+      if (!idToPost) {
+        await saveProject(); // sets lineageRef + trackId
+        idToPost = lineageRef.current?.stem || idToPost || trackId;
+      }
+      if (!idToPost) throw new Error('Track not created');
+
+      // Try both bases
+      let ok = false, lastErr = null, postedRes = null;
+      for (const base of TRACK_BASES) {
+        try {
+          const { data } = await API.post(`${base}${idToPost}/post/`);
+          postedRes = data;
+          ok = true;
+          break;
+        } catch (e) { lastErr = e; }
+      }
+      if (!ok) throw lastErr || new Error('Post failed');
+
+      setIsPosted(true);
+
+      const v = postedRes?.version;
+      alert(`Project posted successfully${v != null ? ` as v${v}` : ''}.`);
+    } catch (e) {
+      console.error('Post failed:', e);
+      alert('Post failed.');
+    } finally {
+      setPosting(false);
+    }
+  };
+  // ===== END Project persistence & sharing =====
+
+  // ===== Hydrate from server when editing an existing track (eager enrichment) =====
+  useEffect(() => {
+    if (!trackId) return;
+    (async () => {
+      try {
+        const data = await fetchTrackById(trackId);
+        console.log('[edit] GET track', data);
+        setIsPosted(!!data.is_posted);
+
+        // 1) Rows from composition.clips
+        const rows = Array.isArray(data?.composition?.clips) ? data.composition.clips : [];
+
+        // 2) Fetch ALL patch details upfront so names/params are ready before UI render
+        const needIds = Array.from(
+          new Set(
+            rows
+              .map(r => getPatchId(r.patch ?? r.patch_id))
+              .filter(id => id != null)
+          )
+        );
+
+        const fetched = await Promise.allSettled(needIds.map(id => fetchPatchById(id)));
+        const byId = new Map();
+        fetched.forEach((res, i) => {
+          const id = needIds[i];
+          if (res.status === 'fulfilled' && res.value) {
+            byId.set(id, normalizeServerPatch(res.value, id));
+          }
+        });
+
+        // 3) Build clips with already-normalised patch objects (names + parameters)
+        const rebuilt = rows.map((row, idx) => {
+          const start = Number((row.start ?? row.start_beat) ?? 0);
+          const end   = Number((row.end   ?? row.end_beat)   ?? start);
+          const pid   = getPatchId(row.patch ?? row.patch_id);
+          const patchObj = byId.get(pid) ?? { id: pid };
+
+          const labelText =
+            patchObj.displayName || patchObj.name || (pid != null ? `Patch ${pid}` : 'Patch');
+
+          return {
+            id: `srv-${data.id}-${idx}`,
+            lane: Number(row.lane ?? idx),
+            startBeat: start,
+            lengthBeats: Math.max(0.25, end - start),
+            label: labelText,
+            patch: patchObj,
+          };
+        });
+
+        setClips(rebuilt);
+
+        // 4) Resize lanes/length to fit content
+        const maxLane = rebuilt.reduce((m, c) => Math.max(m, c.lane), 0);
+        const lastEnd = rebuilt.reduce((m, c) => Math.max(m, c.startBeat + c.lengthBeats), 0);
+        setLanes((prev) => Math.max(prev, maxLane + 1, LANES_MIN));
+        setLengthBeats((prev) => Math.max(prev, Math.ceil(lastEnd), 1));
+
+        // 5) Populate text fields
+        if (typeof data.bpm === 'number') setBpm(data.bpm);
+        if (data.name) setProjectName(data.name);
+        setProjectDesc(typeof data.description === 'string' ? data.description : '');
+
+        // 6) Lineage so the next Save creates a new version in same fork
+        lineageRef.current = { root: data.root ?? null, stem: data.id ?? null };
+      } catch (e) {
+        console.error('Failed to load track for edit:', e);
+        alert('Could not load track details.');
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackId]);
+  // ===== End hydrate =====
+
+  // ===== NEW: auto-enrich whenever clips contain patches missing names/params (so names show BEFORE play) =====
+  const enrichingRef = useRef(new Set());
+  useEffect(() => {
+    const ids = Array.from(
+      new Set(
+        clips.map(c => getPatchId(c.patch)).filter(Boolean)
+      )
+    ).filter((id) => {
+      const clip = clips.find(c => getPatchId(c.patch) === id);
+      const p = clip?.patch;
+      // Need enrichment if either name/displayName or parameters are missing
+      const needs = !(p?.name || p?.displayName) || !p?.parameters;
+      return needs && !enrichingRef.current.has(id);
+    });
+
+    if (!ids.length) return;
+    let cancelled = false;
+
+    ids.forEach((id) => enrichingRef.current.add(id));
+
+    (async () => {
+      const results = await Promise.allSettled(ids.map((id) => fetchPatchById(id)));
+      if (cancelled) return;
+
+      const map = new Map();
+      results.forEach((res, i) => {
+        const id = ids[i];
+        if (res.status === 'fulfilled' && res.value) {
+          map.set(id, normalizeServerPatch(res.value, id));
+        }
+      });
+
+      if (map.size) {
+        setClips((prev) =>
+          prev.map((c) => {
+            const id = getPatchId(c.patch);
+            return map.has(id) ? { ...c, patch: map.get(id) } : c;
+          })
+        );
+      }
+
+      ids.forEach((id) => enrichingRef.current.delete(id));
+    })();
+
+    return () => { cancelled = true; };
+  }, [clips]);
 
   // ----- render -----
   // Precompute safe grid geometry to avoid null deref in overlay
@@ -863,14 +1338,15 @@ export default function ComposePanel() {
     <div>
       {/* Controls */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-        <button onClick={togglePlay}>{isPlaying ? 'Pause' : 'Play'}</button>
-        <button onClick={stop}>Stop</button>
+        <button onClick={togglePlay} className={BTN.play}>{isPlaying ? 'Pause' : 'Play'}</button>
+        <button onClick={stop} className="px-4 py-2 border rounded">Stop</button>
 
         {/* Loop controls */}
         {!loopEnabled && !pickingLoop && (
           <button
             onClick={() => { setPickingLoop(true); setPendingLoopPoints([]); }}
             title="Click twice on the grid to set loop start and end"
+            className="px-3 py-2 border rounded"
           >
             Set loop region
           </button>
@@ -881,7 +1357,7 @@ export default function ComposePanel() {
           </span>
         )}
         {loopEnabled && !pickingLoop && (
-          <React.Fragment>
+          <>
             <span style={{ fontFamily: 'monospace' }}>
               Loop: {fmtTime(loopRegion?.startSec ?? 0)} - {fmtTime(loopRegion?.endSec ?? 0)}
             </span>
@@ -892,10 +1368,11 @@ export default function ComposePanel() {
                 setPlayheadBeat(0);
                 try { Tone.getTransport().seconds = 0; } catch (e) {}
               }}
+              className="px-3 py-2 border rounded"
             >
               Clear loop
             </button>
-          </React.Fragment>
+          </>
         )}
 
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -920,7 +1397,7 @@ export default function ComposePanel() {
           &nbsp;<span style={{ fontVariantNumeric: 'tabular-nums' }}>{pxPerBeat}</span>
         </label>
 
-        <button onClick={() => setShowImportMap(true)}>Import Channelrack...</button>
+        <button onClick={() => setShowImportMap(true)} className="px-3 py-2 border rounded">Import Channelrack...</button>
 
         {/* Import Patch into lane */}
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
@@ -933,8 +1410,8 @@ export default function ComposePanel() {
           >
             <option value="">{isFetchingPatches ? 'Loading...' : 'Select a patch...'}</option>
             {patches.map((p) => (
-              <option key={p.id} value={p.id}>
-                {(p.name && p.name.trim()) || `Patch ${p.id}`} {p.is_posted ? '(posted)' : '(saved)'}
+              <option key={getPatchId(p)} value={getPatchId(p)}>
+                {(p.name && p.name.trim()) || `Patch ${getPatchId(p)}`} {p.is_posted ? '(posted)' : '(saved)'}
               </option>
             ))}
           </select>
@@ -956,7 +1433,8 @@ export default function ComposePanel() {
             type="button"
             onClick={importPatchIntoLane}
             disabled={!selectedPatchId || isFetchingPatches}
-            title="Insert the selected patch as a clip on the chosen lane at the current playhead"
+            title="Insert the selected patch on the chosen lane at the current playhead"
+            className="px-3 py-2 border rounded"
           >
             Add to Lane
           </button>
@@ -966,6 +1444,7 @@ export default function ComposePanel() {
             onClick={loadPatches}
             disabled={isFetchingPatches}
             title="Reload your saved and posted patches"
+            className="px-3 py-2 border rounded"
           >
             Reload
           </button>
@@ -973,21 +1452,66 @@ export default function ComposePanel() {
           {fetchError ? <span style={{ color: 'crimson' }}>{fetchError}</span> : null}
         </div>
 
-        {/* Project save controls */}
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
-          <label htmlFor="projectName"><strong>Project:</strong></label>
+        {/* NEW: Start New Project */}
+        <button
+          onClick={startNewProject}
+          className="px-3 py-2 border rounded"
+          title="Clear the timeline and reset settings"
+        >
+          New Project
+        </button>
+
+        {/* Project save controls — buttons match SynthInterface */}
+        <div className="ml-auto inline-flex items-center gap-2">
+          <label htmlFor="projectName" className="font-semibold mr-1">Project:</label>
           <input
             id="projectName"
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
             placeholder="Untitled"
-            style={{ width: 220 }}
+            className="border rounded px-2 py-1 w-[220px]"
           />
-          <button onClick={saveProject} disabled={saving} title="Save your project">
-            {saving ? 'Saving...' : 'Save Project'}
+
+          <button
+            onClick={downloadProject}
+            title="Download a .json snapshot of your project"
+            className={BTN.download}
+          >
+            Download Project
           </button>
-          {saveMsg ? <span style={{ fontStyle: 'italic' }}>{saveMsg}</span> : null}
+
+          <button
+            onClick={saveProject}
+            disabled={saving}
+            title="Save to your profile"
+            className={`${BTN.save} ${saving ? BTN.disabled : ''}`}
+          >
+            {saving ? 'Saving…' : 'Save Project'}
+          </button>
+
+          <button
+            onClick={postProject}
+            disabled={posting}
+            title="Post to your profile so others can see it"
+            className={`${BTN.post} ${posting ? BTN.disabled : ''}`}
+          >
+            {posting ? 'Posting…' : (isPosted ? 'Re-post Project' : 'Post Project')}
+          </button>
         </div>
+      </div>
+
+      {/* Description (user text) */}
+      <div style={{ marginBottom: 10 }}>
+        <label htmlFor="projectDesc" className="font-semibold block mb-1">Description</label>
+        <textarea
+          id="projectDesc"
+          value={projectDesc}
+          onChange={(e) => setProjectDesc(e.target.value)}
+          placeholder="Describe your track…"
+          rows={3}
+          className="w-full border rounded px-2 py-2"
+          style={{ resize: 'vertical', minHeight: 72 }}
+        />
       </div>
 
       {/* Time ruler (seconds only) */}
@@ -1165,7 +1689,7 @@ export default function ComposePanel() {
           />
         )}
 
-        {/* Clips */}
+        {/* Patches (tiles) */}
         <div style={{ position: 'absolute', left: LANE_GUTTER, top: 0, height: '100%', width: totalWidthPx }}>
           {clips.map((c) => {
             const left = c.startBeat * pxPerBeat;
@@ -1174,10 +1698,17 @@ export default function ComposePanel() {
             const meta = laneMeta[c.lane] || defaultLaneMeta(c.lane);
             const laneColor = meta.color || '#cfe8ff';
             const sel = isSelected(c.id);
+
+            const pid = getPatchId(c.patch);
+            const pName = c.patch?.displayName ?? c.patch?.name ?? null;
+            const labelText = pName
+              ? `${pName} (${pid ?? ''})`
+              : (c.label || (pid != null ? `Patch ${pid}` : 'Patch'));
+
             return (
               <div
                 key={c.id}
-                data-clip="1"
+                data-patch="1"
                 onMouseDown={(e) => {
                   if (pickingLoop) return;
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -1186,11 +1717,8 @@ export default function ComposePanel() {
                   else if (x >= rect.width - 8) onClipMouseDown(e, c, 'r');
                   else onClipMouseDown(e, c, null);
                 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                }}
-
-                title={`${c.label} @ ${fmtTime(c.startBeat * secPerBeat)} • ${meta.name}`}
+                onClick={(e) => { e.stopPropagation(); }}
+                title={`Patch: ${labelText} @ ${fmtTime(c.startBeat * secPerBeat)} • ${meta.name}`}
                 style={{
                   position: 'absolute',
                   left,
@@ -1219,7 +1747,7 @@ export default function ComposePanel() {
                   }}
                 />
                 <div style={{ padding: '4px 8px', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {c.label}
+                  {labelText}
                 </div>
               </div>
             );
@@ -1287,8 +1815,8 @@ export default function ComposePanel() {
             </div>
 
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:12 }}>
-              <button onClick={()=>setShowImportMap(false)}>Cancel</button>
-              <button onClick={doImportMapped}>Import</button>
+              <button onClick={()=>setShowImportMap(false)} className="px-3 py-2 border rounded">Cancel</button>
+              <button onClick={doImportMapped} className="px-3 py-2 border rounded">Import</button>
             </div>
           </div>
         </div>
@@ -1296,3 +1824,6 @@ export default function ComposePanel() {
     </div>
   );
 }
+
+// Tiny no-op to appease linting on an inline hook call site
+function candles() { return null; }

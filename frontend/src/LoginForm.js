@@ -1,79 +1,78 @@
-import React, { useState, useEffect } from 'react';
+// src/LoginForm.js
+import React, { useState } from 'react';
 import API from './api';
 import { jwtDecode } from 'jwt-decode';
-import splashLogo from './assets/splash-logo.png'; 
 import './LoginForm.css';
 
-function LoginForm({ setToken }) {
-    const [formData, setFormData] = useState({ username: '', password: '' });
-    const [error, setError] = useState('');
-    const [showSplash, setShowSplash] = useState(true);
+function LoginForm({ setToken, onShowRegister }) {
+  const [formData, setFormData] = useState({ username: '', password: '' });
+  const [error, setError] = useState('');
 
-    useEffect(() => {
-        const timer = setTimeout(() => setShowSplash(false), 2000); // 2 sec splash
-        return () => clearTimeout(timer);
-    }, []);
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
 
-    const handleChange = e => {
-        setFormData({ ...formData, [e.target.name]: e.target.value });
-    };
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await API.post('/token/', formData);
+      const { access, refresh } = res.data;
+      const decoded = jwtDecode(access);
 
-    const handleSubmit = async e => {
-        e.preventDefault();
-        console.log('Logging in with:', formData);
+      localStorage.setItem('access_token', access);
+      localStorage.setItem('refresh_token', refresh);
+      localStorage.setItem('user_id', decoded.user_id);
 
-        try {
-            const response = await API.post('/token/', formData);
-            const { access, refresh } = response.data;
-            const decoded = jwtDecode(access);
-
-            localStorage.setItem('access_token', access);
-            localStorage.setItem('refresh_token', refresh);
-            localStorage.setItem('user_id', decoded.user_id);
-
-            setToken(access);
-            setError('');
-        } catch (err) {
-            console.error('Login error:', err.response?.data || err);
-            setError('Login failed. Please check your credentials.');
-        }
-    };
-
-    //  SPLASH SCREEN SECTION
-    if (showSplash) {
-        return (
-            <div className="splash-screen">
-                <img
-                    src={splashLogo}
-                    alt="SynthSpore Logo"
-                    className="splash-image"
-                />
-            </div>
-        );
+      setToken(access);
+      setError('');
+    } catch (err) {
+      console.error('Login error:', err.response?.data || err);
+      setError('Login failed. Please check your credentials.');
     }
+  };
 
-    //  LOGIN FORM SECTION
-    return (
-        <form onSubmit={handleSubmit} className="login-form">
-            <h2>Login</h2>
-            <input
-                type="text"
-                name="username"
-                placeholder="Username"
-                value={formData.username}
-                onChange={handleChange}
-            />
-            <input
-                type="password"
-                name="password"
-                placeholder="Password"
-                value={formData.password}
-                onChange={handleChange}
-            />
-            <button type="submit">Login</button>
-            {error && <p className="error">{error}</p>}
-        </form>
-    );
+  return (
+    <div className="login-page">
+      <form onSubmit={handleSubmit} className="login-form">
+        <h2>Login</h2>
+
+        <input
+          type="text"
+          name="username"
+          placeholder="Username"
+          value={formData.username}
+          onChange={handleChange}
+          autoComplete="username"
+        />
+
+        <input
+          type="password"
+          name="password"
+          placeholder="Password"
+          value={formData.password}
+          onChange={handleChange}
+          autoComplete="current-password"
+        />
+
+        <button type="submit">Login</button>
+
+        {error && <p className="error">{error}</p>}
+
+        {/* CTA inside the card */}
+        <div className="login-footer">
+          <span>Don't have an account? </span>
+          <button
+            type="button"
+            className="login-cta__link"
+            onClick={onShowRegister}
+          >
+            Register here
+          </button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 export default LoginForm;

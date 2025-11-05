@@ -1,12 +1,12 @@
-// src/components/PatchLineageGraph.jsx
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+// src/components/TrackLineageGraph.jsx
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import API from '../api';
 
 const NODE_RADIUS = 20;
 const H_SPACING = 160;
 const V_SPACING = 60;
 
-const PatchLineageGraph = ({ patchId }) => {
+export default function TrackLineageGraph({ trackId }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [hovered, setHovered] = useState(null);
@@ -19,22 +19,22 @@ const PatchLineageGraph = ({ patchId }) => {
   useEffect(() => {
     const fetchLineage = async () => {
       try {
-        const res = await API.get(`/patches/${patchId}/lineage/`);
+        const res = await API.get(`/tracks/${trackId}/lineage/`);
         setNodes(res.data?.nodes || []);
         setEdges(res.data?.edges || []);
       } catch (err) {
-        console.error('Failed to load patch lineage:', err);
+        console.error('Failed to load track lineage:', err);
       }
     };
     fetchLineage();
-  }, [patchId]);
+  }, [trackId]);
 
+  // Build display nodes, adding ghost placeholders for missing endpoints.
   const displayNodes = useMemo(() => {
     const byId = new Map();
     (nodes || []).forEach(n => byId.set(n.id, { ...n, isGhost: false }));
 
     const ghostCountFor = new Map();
-
     const addGhost = (id, anchor, direction = -1) => {
       const count = (ghostCountFor.get(anchor.id) || 0) + 1;
       ghostCountFor.set(anchor.id, count);
@@ -47,7 +47,7 @@ const PatchLineageGraph = ({ patchId }) => {
           id,
           x,
           y,
-          name: 'Unavailable patch',
+          name: 'Unavailable track',
           version: null,
           is_posted: false,
           isCurrent: false,
@@ -67,19 +67,21 @@ const PatchLineageGraph = ({ patchId }) => {
     return Array.from(byId.values());
   }, [nodes, edges]);
 
+  // Fast id -> node map
   const nodeById = useMemo(() => {
     const m = new Map();
     displayNodes.forEach(n => m.set(n.id, n));
     return m;
   }, [displayNodes]);
 
+  // Determine which nodes are linkable (exist and are retrievable)
   const [linkable, setLinkable] = useState(new Set());
   useEffect(() => {
     let cancelled = false;
     const check = async () => {
       const ids = displayNodes.filter(n => !n.isGhost).map(n => n.id);
       const unique = Array.from(new Set(ids));
-      const results = await Promise.allSettled(unique.map(id => API.get(`/patches/${id}/`)));
+      const results = await Promise.allSettled(unique.map(id => API.get(`/tracks/${id}/`)));
       const ok = new Set();
       results.forEach((r, i) => {
         if (r.status === 'fulfilled') ok.add(unique[i]);
@@ -90,19 +92,15 @@ const PatchLineageGraph = ({ patchId }) => {
     return () => { cancelled = true; };
   }, [displayNodes]);
 
+  // Zoom
   const handleWheel = (e) => {
     e.preventDefault();
     const scaleChange = e.deltaY > 0 ? 0.9 : 1.1;
-    setTransform(prev => {
-      const newScale = Math.max(0.2, Math.min(4, prev.scale * scaleChange));
-      return { ...prev, scale: newScale };
-    });
+    setTransform(prev => ({ ...prev, scale: Math.max(0.2, Math.min(4, prev.scale * scaleChange)) }));
   };
 
-  const handleMouseDown = (e) => {
-    dragging.current = true;
-    lastPos.current = { x: e.clientX, y: e.clientY };
-  };
+  // Pan
+  const handleMouseDown = (e) => { dragging.current = true; lastPos.current = { x: e.clientX, y: e.clientY }; };
   const handleMouseMove = (e) => {
     if (!dragging.current) return;
     const dx = e.clientX - lastPos.current.x;
@@ -112,6 +110,7 @@ const PatchLineageGraph = ({ patchId }) => {
   };
   const handleMouseUp = () => { dragging.current = false; };
 
+  // Geometry
   const nodeVisualRadius = (n) => NODE_RADIUS + Math.min(n.downloads || 0, 30) * 0.5;
 
   const distancePointToSegment = (px, py, x1, y1, x2, y2) => {
@@ -164,6 +163,7 @@ const PatchLineageGraph = ({ patchId }) => {
     >
       <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}>
 
+        {/* Edges */}
         {(edges || []).map((edge, i) => {
           const from = nodeById.get(edge.from);
           const to = nodeById.get(edge.to);
@@ -180,33 +180,34 @@ const PatchLineageGraph = ({ patchId }) => {
           return <line key={i} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="gray" strokeWidth="2" />;
         })}
 
-        {displayNodes.map((node) => {
-          const r = nodeVisualRadius(node);
-          const linkAllowed = linkable.has(node.id);
+        {/* Nodes */}
+        {displayNodes.map((n) => {
+          const r = nodeVisualRadius(n);
+          const linkAllowed = linkable.has(n.id);
           const unavailable = !linkAllowed;
-          const fill = node.isCurrent ? '#3b82f6' : (unavailable ? '#f2f2f2' : '#d3d3d3');
+          const fill = n.isCurrent ? '#3b82f6' : (unavailable ? '#f2f2f2' : '#d3d3d3');
           const stroke = unavailable ? '#888' : '#000';
           const dash = unavailable ? '6 4' : '0';
-          const label = `v${node.version ?? '?.?'}`;
+          const label = `v${n.version ?? '?.?'}`;
 
           return (
-            <g key={node.id}>
+            <g key={n.id}>
               <circle
-                cx={node.x}
-                cy={node.y}
+                cx={n.x}
+                cy={n.y}
                 r={r}
                 fill={fill}
                 stroke={stroke}
                 strokeDasharray={dash}
                 strokeWidth="1"
-                onMouseEnter={() => setHovered(node)}
+                onMouseEnter={() => setHovered(n)}
                 onMouseLeave={() => setHovered(null)}
               />
               {linkAllowed ? (
-                <a href={`/patches/${node.id}`}>
+                <a href={`/tracks/${n.id}`}>
                   <text
-                    x={node.x}
-                    y={node.y - r - 6}
+                    x={n.x}
+                    y={n.y - r - 6}
                     textAnchor="middle"
                     fontSize="10"
                     fill="black"
@@ -217,8 +218,8 @@ const PatchLineageGraph = ({ patchId }) => {
                 </a>
               ) : (
                 <text
-                  x={node.x}
-                  y={node.y - r - 6}
+                  x={n.x}
+                  y={n.y - r - 6}
                   textAnchor="middle"
                   fontSize="10"
                   fill="#444"
@@ -230,6 +231,7 @@ const PatchLineageGraph = ({ patchId }) => {
           );
         })}
 
+        {/* Tooltip */}
         {hovered && (
           <foreignObject x={hovered.x + 10} y={hovered.y - 30} width="220" height="70">
             <div style={{
@@ -240,7 +242,7 @@ const PatchLineageGraph = ({ patchId }) => {
               fontSize: '10px',
               pointerEvents: 'none'
             }}>
-              <strong>{hovered.name || 'Patch'}</strong><br />
+              <strong>{hovered.name || 'Track'}</strong><br />
               {`v${hovered.version ?? '?.?'}`}<br />
               {hovered.uploaded_by ? <em>by {hovered.uploaded_by}</em> : <em>unavailable</em>}
             </div>
@@ -250,6 +252,4 @@ const PatchLineageGraph = ({ patchId }) => {
       </g>
     </svg>
   );
-};
-
-export default PatchLineageGraph;
+}
