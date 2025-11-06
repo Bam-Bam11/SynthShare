@@ -145,7 +145,7 @@ const FeedPage = () => {
   };
 
   return (
-    <div style={{ padding: '20px' }}>
+    <div className="p-5">
       <h2>Your Feed</h2>
 
       {loading && <p>Loading...</p>}
@@ -154,22 +154,22 @@ const FeedPage = () => {
         <>
           {/* Patches */}
           {patchError && (
-            <div style={{ color: 'crimson', fontSize: 12, marginBottom: 8 }}>
+            <div className="text-red-600 text-sm mb-2">
               Error loading patches: {typeof patchError === 'string' ? patchError : JSON.stringify(patchError)}
             </div>
           )}
 
-          <h3 style={{ marginTop: 12 }}>Patches</h3>
+          <h3 className="mt-3">Patches</h3>
           {patches.length === 0 ? (
             <p>No posts from followed users yet.</p>
           ) : (
             <ul>
               {patches.map((patch) => (
-                <li key={patch.id} style={{ marginBottom: '10px' }}>
+                <li key={patch.id} className="mb-2">
                   <strong>
                     <Link
                       to={`/patches/${patch.id}`}
-                      style={{ textDecoration: 'none', color: 'blue' }}
+                      className="no-underline text-blue-600 dark:text-blue-400"
                     >
                       {patch.name}
                     </Link>
@@ -177,24 +177,26 @@ const FeedPage = () => {
                   by{' '}
                   <Link
                     to={`/profile/${patch.uploaded_by}`}
-                    style={{ textDecoration: 'none', color: 'green' }}
+                    className="no-underline text-green-600 dark:text-green-400"
                   >
                     {patch.uploaded_by}
                   </Link>
                   <br />
                   Posted: {new Date(patch.created_at).toLocaleString()}
-                  <button
-                    onClick={() => PlayPatch(patch)}
-                    style={{ marginLeft: '10px' }}
-                  >
-                    Play
-                  </button>
-                  <button
-                    onClick={() => assignPatchToFirstEmptyChannel(patch)}
-                    style={{ marginLeft: '10px' }}
-                  >
-                    Add to Rack
-                  </button>
+                  <span className="inline-flex flex-wrap gap-2 ml-2">
+                    <button
+                      className="btn btn-play"
+                      onClick={() => PlayPatch(patch)}
+                    >
+                      Play
+                    </button>
+                    <button
+                      className="btn btn-add"
+                      onClick={() => assignPatchToFirstEmptyChannel(patch)}
+                    >
+                      Add to Rack
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -202,21 +204,21 @@ const FeedPage = () => {
 
           {/* Tracks (shown if endpoint returns any) */}
           {trackError && (
-            <div style={{ color: 'crimson', fontSize: 12, marginTop: 12 }}>
+            <div className="text-red-600 text-sm mt-3">
               Error loading tracks: {typeof trackError === 'string' ? trackError : JSON.stringify(trackError)}
             </div>
           )}
 
           {tracks.length > 0 && (
             <>
-              <h3 style={{ marginTop: 16 }}>Tracks</h3>
+              <h3 className="mt-4">Tracks</h3>
               <ul>
                 {tracks.map((t) => (
-                  <li key={t.id} style={{ marginBottom: '10px' }}>
+                  <li key={t.id} className="mb-2">
                     <strong>
                       <Link
                         to={`/tracks/${t.id}`}
-                        style={{ textDecoration: 'none', color: 'blue' }}
+                        className="no-underline text-blue-600 dark:text-blue-400"
                       >
                         {t.name || `Track ${t.id}`}
                       </Link>
@@ -224,18 +226,20 @@ const FeedPage = () => {
                     by{' '}
                     <Link
                       to={`/profile/${t.uploaded_by}`}
-                      style={{ textDecoration: 'none', color: 'green' }}
+                      className="no-underline text-green-600 dark:text-green-400"
                     >
                       {t.uploaded_by}
                     </Link>
                     <br />
                     Posted: {new Date(t.created_at).toLocaleString()}
-                    <button
-                      onClick={() => handlePlayTrack(t.id)}
-                      style={{ marginLeft: '10px' }}
-                    >
-                      {previewingId === t.id ? 'Stop' : 'Play'}
-                    </button>
+                    <span className="inline-flex flex-wrap gap-2 ml-2">
+                      <button
+                        className="btn btn-play"
+                        onClick={() => handlePlayTrack(t.id)}
+                      >
+                        {previewingId === t.id ? 'Stop' : 'Play'}
+                      </button>
+                    </span>
                   </li>
                 ))}
               </ul>

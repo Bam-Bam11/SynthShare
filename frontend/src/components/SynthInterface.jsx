@@ -1,3 +1,4 @@
+// src/components/SynthInterface.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import * as Tone from 'tone';
 import axios from 'axios';
@@ -99,8 +100,6 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       const patch = JSON.parse(patchToLoad);
       const params = patch.parameters || {};
 
-      // Remember the source so saving sends a `stem`
-      // patchdetail writes { stem: patch.id, action: 'edit'|'fork', root, ... }
       setSourcePatchId(patch.stem || patch.id || null);
 
       // Meta
@@ -126,7 +125,7 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       setNote(patch.note || 'C4');
       setDuration(patch.duration || '8n');
 
-      // Oscillators: either use provided array or map legacy single-osc fields
+      // Oscillators
       if (Array.isArray(params.oscillators) && params.oscillators.length) {
         const [o1, o2] = params.oscillators;
         if (o1) {
@@ -210,8 +209,6 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     await Tone.start();
 
     const now = Tone.now();
-    the: {
-    }
     const targetHzFromNote = Tone.Frequency(note).toFrequency();
 
     // Envelope
@@ -344,7 +341,7 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       portamento,
       noiseLevel,
 
-      // Legacy for backward compatibility (old patches/UIs)
+      // Legacy for backward compatibility
       oscillator: oscType,
       detune
     };
@@ -354,10 +351,9 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       description: desc,
       parameters,
       synth_type: 'tone',
-      note,       // still stored for legacy / when frequency is null
+      note,
       duration,
       is_posted: false,
-      // CRITICAL: include stem when editing/forking
       ...(sourcePatchId ? { stem: sourcePatchId } : {})
     };
 
@@ -365,7 +361,7 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       const res = await axios.post('http://localhost:8000/api/patches/', payload, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
       });
-      setCurrentPatch(res.data); // contains server-computed version/root/stem/etc.
+      setCurrentPatch(res.data);
       alert(`Patch saved successfully as v${res.data.version || '0.0'}`);
       console.log('Saved patch response:', res.data);
     } catch (err) {
@@ -439,11 +435,8 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     };
     onParamsChange(current);
   }, [
-    // osc1
     oscType, detune, osc1Gain, osc1Freq, osc1SlideFrom,
-    // osc2
     osc2Enabled, osc2Type, osc2Gain, osc2Detune, osc2Freq, osc2SlideFrom,
-    // env/filter/global
     attack, decay, sustain, release,
     filterType, resonance, cutoff, bandLow, bandHigh,
     portamento, noiseLevel, note, duration,
@@ -465,15 +458,15 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
 
   const SnapButtons = ({ onSnap }) => (
     <div className="flex gap-2 mt-2">
-      <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(69)) /* A4 */}>A4</button>
-      <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(60)) /* C4 */}>C4</button>
-      <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(64)) /* E4 */}>E4</button>
-      <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(67)) /* G4 */}>G4</button>
+      <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(69))}>A4</button>
+      <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(60))}>C4</button>
+      <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(64))}>E4</button>
+      <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(67))}>G4</button>
     </div>
   );
 
   return (
-    <div className="p-4 max-w-3xl mx-auto rounded-xl shadow-lg bg-white">
+    <div className="param-box p-4 max-w-3xl mx-auto rounded-xl shadow-lg">
       <h2 className="text-xl font-bold mb-4">Synth Interface</h2>
 
       {/* Show latest server version if available */}
@@ -737,12 +730,12 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
 
       {/* Transport / Actions */}
       <div className="mt-4 flex gap-2">
-        <button onClick={playNote} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">Play</button>
+        <button className="btn btn-play" onClick={playNote}>Play</button>
         {!hideNameAndDescription && (
           <>
-            <button onClick={handleSavePatch} className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600">Save Patch</button>
-            <button onClick={handlePostPatch} className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600">Post Patch</button>
-            <button onClick={handleDownloadPatch} className="px-4 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600">Download Patch</button>
+            <button className="btn btn-primary btn-save" onClick={handleSavePatch}>Save patch</button>
+            <button className="btn btn-accent" onClick={handlePostPatch}>Post patch</button>
+            <button className="btn btn-info btn-download" onClick={handleDownloadPatch}>Download patch</button>
           </>
         )}
       </div>
@@ -750,7 +743,12 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       {/* Visualiser */}
       <div className="mt-4">
         <h3>Frequency Visualisation:</h3>
-        <canvas ref={canvasRef} width={500} height={120} style={{ border: '1px solid black', width: '100%' }} />
+        <canvas
+          ref={canvasRef}
+          width={500}
+          height={120}
+          style={{ border: '1px solid var(--panel-border)', width: '100%' }}
+        />
       </div>
     </div>
   );

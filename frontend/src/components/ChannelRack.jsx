@@ -26,6 +26,7 @@ const ChannelRack = () => {
     await Tone.start();
     const transport = Tone.getTransport();
 
+    // Toggle off if already looping
     if (loopRef.current) {
       transport.stop();
       loopRef.current.dispose();
@@ -68,47 +69,32 @@ const ChannelRack = () => {
   if (!isVisible) return null;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        bottom: '20px',
-        right: '20px',
-        width: '420px',
-        maxHeight: '70vh',
-        overflowY: 'auto',
-        background: '#fff',
-        border: '1px solid #aaa',
-        padding: '10px',
-        boxShadow: '0 0 10px rgba(0,0,0,0.5)',
-        zIndex: 1000,
-        borderRadius: '8px',
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h3>Channel Rack</h3>
-        <button onClick={toggleVisibility}>Close</button>
+    <div className="channel-rack">
+      <div className="channel-rack__header">
+        <h3 className="channel-rack__title">Channel Rack</h3>
+        <button onClick={toggleVisibility} className="btn btn-ghost">Close</button>
       </div>
 
-      <div style={{ marginBottom: '10px' }}>
-        <label>Tempo: {tempo} BPM</label>
+      <div className="channel-rack__controls">
+        <label className="block mb-1">Tempo: {tempo} BPM</label>
         <input
           type="range"
           min="60"
           max="200"
           value={tempo}
-          onChange={(e) => setTempo(parseInt(e.target.value))}
-          style={{ width: '100%' }}
+          onChange={(e) => setTempo(parseInt(e.target.value, 10))}
         />
       </div>
 
-      <button onClick={playSequence} style={{ marginBottom: '10px' }}>
+      <button
+        onClick={playSequence}
+        className={isPlaying ? 'btn btn-stop mb-2' : 'btn btn-play mb-2'}
+      >
         {isPlaying ? 'Stop' : 'Play'}
       </button>
 
       {channels.map((channel, index) => {
-        // Default label = position-based
         const defaultLabel = `Channel ${index + 1}`;
-        // If user has typed a custom label on the patch, prefer that
         const userLabel =
           channel?.patch?.displayName && channel.patch.displayName.trim().length > 0
             ? channel.patch.displayName
@@ -116,7 +102,7 @@ const ChannelRack = () => {
         const visibleLabel = userLabel || defaultLabel;
 
         return (
-          <div key={channel.id} style={{ marginBottom: '15px' }}>
+          <div key={channel.id} className="channel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               {channel.patch ? (
                 <input
@@ -124,54 +110,42 @@ const ChannelRack = () => {
                   value={channel.patch.displayName || ''}
                   onChange={(e) => updateChannelLabel(channel.id, e.target.value)}
                   placeholder={defaultLabel}
-                  style={{ width: '150px', marginRight: '10px' }}
+                  className="channel-rack__label"
                   title={channel.patch.name || defaultLabel}
                 />
               ) : (
                 <strong>{visibleLabel}</strong>
               )}
-              <button onClick={() => removeChannel(channel.id)}>Remove</button>
+              <button onClick={() => removeChannel(channel.id)} className="btn btn-danger">
+                Remove
+              </button>
             </div>
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(16, 1fr)',
-                gap: '4px',
-                marginTop: '8px',
-              }}
-            >
-              {channel.steps.map((active, stepIdx) => (
-                <div
-                  key={stepIdx}
-                  onClick={() => toggleStep(channel.id, stepIdx)}
-                  style={{
-                    width: '100%',
-                    paddingTop: '100%',
-                    position: 'relative',
-                    backgroundColor:
-                      currentStep === stepIdx ? '#ffa500' : active ? '#4caf50' : '#ddd',
-                    cursor: 'pointer',
-                    borderRadius: '4px',
-                  }}
-                >
+            <div className="step-grid">
+              {channel.steps.map((active, stepIdx) => {
+                const classes = [
+                  'step',
+                  active ? 'is-active' : '',
+                  currentStep === stepIdx ? 'is-current' : '',
+                ].join(' ').trim();
+
+                return (
                   <div
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                    }}
-                  />
-                </div>
-              ))}
+                    key={stepIdx}
+                    className={classes}
+                    onClick={() => toggleStep(channel.id, stepIdx)}
+                    title={`Step ${stepIdx + 1}`}
+                  >
+                    <div className="fill" />
+                  </div>
+                );
+              })}
             </div>
           </div>
         );
       })}
 
-      <button onClick={addChannel}>Add Channel</button>
+      <button onClick={addChannel} className="btn btn-add">Add Channel</button>
     </div>
   );
 };

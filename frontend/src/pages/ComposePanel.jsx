@@ -19,12 +19,21 @@ const DRAFT_KEY = 'trackDraft_v9';  // bump on schema changes
 const PATCH_BASES = ['/patches/'];
 const TRACK_BASES = ['/tracks/'];
 
-// ---- shared button styles (match SynthInterface buttons) ----
+// ---- shared button styles (use global tokenised classes) ----
 const BTN = {
-  play: 'px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600',
-  save: 'px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600',
-  post: 'px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600',
-  download: 'px-4 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600',
+  play: 'btn btn-play',
+  stop: 'btn btn-stop',
+  loop: 'btn btn-loop',
+  warning: 'btn btn-warning',
+  refresh: 'btn btn-refresh',
+  save: 'btn btn-primary btn-save',
+  post: 'btn btn-post',                 // alias of .btn-accent with dark-mode text fix
+  download: 'btn btn-info btn-download',
+  neutral: 'btn',                       // default neutral button
+  ghost: 'btn-ghost',
+  danger: 'btn btn-danger',
+  add: 'btn btn-add',
+  unpost: 'btn btn-unpost',
   disabled: 'opacity-60 cursor-not-allowed',
 };
 
@@ -1339,14 +1348,14 @@ export default function ComposePanel() {
       {/* Controls */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
         <button onClick={togglePlay} className={BTN.play}>{isPlaying ? 'Pause' : 'Play'}</button>
-        <button onClick={stop} className="px-4 py-2 border rounded">Stop</button>
+        <button onClick={stop} className={BTN.stop}>Stop</button>
 
         {/* Loop controls */}
         {!loopEnabled && !pickingLoop && (
           <button
             onClick={() => { setPickingLoop(true); setPendingLoopPoints([]); }}
             title="Click twice on the grid to set loop start and end"
-            className="px-3 py-2 border rounded"
+            className={BTN.loop}
           >
             Set loop region
           </button>
@@ -1368,7 +1377,7 @@ export default function ComposePanel() {
                 setPlayheadBeat(0);
                 try { Tone.getTransport().seconds = 0; } catch (e) {}
               }}
-              className="px-3 py-2 border rounded"
+              className={BTN.warning}
             >
               Clear loop
             </button>
@@ -1397,7 +1406,7 @@ export default function ComposePanel() {
           &nbsp;<span style={{ fontVariantNumeric: 'tabular-nums' }}>{pxPerBeat}</span>
         </label>
 
-        <button onClick={() => setShowImportMap(true)} className="px-3 py-2 border rounded">Import Channelrack...</button>
+        <button onClick={() => setShowImportMap(true)} className={BTN.neutral}>Import Channelrack...</button>
 
         {/* Import Patch into lane */}
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
@@ -1434,7 +1443,7 @@ export default function ComposePanel() {
             onClick={importPatchIntoLane}
             disabled={!selectedPatchId || isFetchingPatches}
             title="Insert the selected patch on the chosen lane at the current playhead"
-            className="px-3 py-2 border rounded"
+            className={BTN.add}
           >
             Add to Lane
           </button>
@@ -1444,7 +1453,7 @@ export default function ComposePanel() {
             onClick={loadPatches}
             disabled={isFetchingPatches}
             title="Reload your saved and posted patches"
-            className="px-3 py-2 border rounded"
+            className={BTN.refresh}
           >
             Reload
           </button>
@@ -1455,7 +1464,7 @@ export default function ComposePanel() {
         {/* NEW: Start New Project */}
         <button
           onClick={startNewProject}
-          className="px-3 py-2 border rounded"
+          className={BTN.neutral}
           title="Clear the timeline and reset settings"
         >
           New Project
@@ -1648,7 +1657,7 @@ export default function ComposePanel() {
           })}
         </div>
 
-        {/* Grid background */}
+        /* Grid background */
         <div
           style={{
             position: 'absolute',
@@ -1657,9 +1666,9 @@ export default function ComposePanel() {
             height: '100%',
             width: totalWidthPx,
             backgroundImage: `
-              linear-gradient(#eee 1px, transparent 1px),
-              linear-gradient(90deg, rgba(0,0,0,0.06) 1px, transparent 1px),
-              linear-gradient(90deg, rgba(0,0,0,0.12) 1px, transparent 1px)
+              linear-gradient(var(--grid-hline) 1px, transparent 1px),
+              linear-gradient(90deg, var(--grid-minor-vline) 1px, transparent 1px),
+              linear-gradient(90deg, var(--grid-major-vline) 1px, transparent 1px)
             `,
             backgroundSize: `
               100% ${LANE_HEIGHT}px,
@@ -1669,6 +1678,7 @@ export default function ComposePanel() {
             zIndex: 0,
           }}
         />
+
 
         {/* Loop overlay */}
         {loopEnabled && loopRegion && loopRegion.endSec > loopRegion.startSec && (
@@ -1815,8 +1825,8 @@ export default function ComposePanel() {
             </div>
 
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:12 }}>
-              <button onClick={()=>setShowImportMap(false)} className="px-3 py-2 border rounded">Cancel</button>
-              <button onClick={doImportMapped} className="px-3 py-2 border rounded">Import</button>
+              <button onClick={()=>setShowImportMap(false)} className={BTN.neutral}>Cancel</button>
+              <button onClick={doImportMapped} className={BTN.neutral}>Import</button>
             </div>
           </div>
         </div>

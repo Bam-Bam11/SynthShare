@@ -1,3 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base typography / smoothing */
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
@@ -6,18 +11,554 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-/* Base light/dark backgrounds (you can expand this later) */
-.theme-light body { background: #ffffff; color: #111; }
-.theme-dark  body { background: #0b0b0b; color: #f5f5f5; }
 
 /* Ensure app can fill the viewport; remove default margins */
 html, body, #root { height: 100%; margin: 0; }
+
+/* Base light/dark backgrounds */
+.theme-light body { background: #ffffff; color: #111; }
+.theme-dark  body { background: #0b0b0b; color: #f5f5f5; }
+
+/* =============================================================
+   DESIGN TOKENS (inputs + buttons)
+   ============================================================= */
+:root {
+  /* Inputs */
+  --input-bg: #ffffff;
+  --input-fg: #111827;            /* gray-900 */
+  --input-border: #d1d5db;        /* gray-300 */
+  --input-placeholder: #6b7280;   /* gray-500 */
+  --input-ring: #3b82f6;          /* blue-500 */
+
+  /* Buttons (neutral) */
+  --btn-bg: #f8fafc;              /* slate-50 */
+  --btn-fg: #111827;              /* gray-900 */
+  --btn-border: #d1d5db;          /* gray-300 */
+  --btn-hover: #e5e7eb;           /* gray-200 */
+
+  /* Primary */
+  --btn-primary-bg: #2563eb;      /* blue-600 */
+  --btn-primary-fg: #ffffff;
+  --btn-primary-hover: #1d4ed8;   /* blue-700 */
+
+  /* Destructive */
+  --btn-danger-bg: #dc2626;       /* red-600 */
+  --btn-danger-fg: #ffffff;
+  --btn-danger-hover: #b91c1c;    /* red-700 */
+
+  /* Accent (Post = purple) */
+  --btn-accent-bg: #7c3aed;       /* violet-600 */
+  --btn-accent-fg: #ffffff;
+  --btn-accent-hover: #6d28d9;    /* violet-700 */
+
+  /* Info (Download = indigo) */
+  --btn-info-bg: #6366f1;         /* indigo-500 */
+  --btn-info-fg: #ffffff;
+  --btn-info-hover: #4f46e5;      /* indigo-600 */
+
+  /* Play (green-500) */
+  --btn-play-bg: #22c55e;         /* green-500 */
+  --btn-play-fg: #ffffff;
+  --btn-play-hover: #16a34a;      /* green-600 */
+
+  /* Add to Rack (paler green) */
+  --btn-add-bg: #4ade80;          /* green-400 */
+  --btn-add-fg: #ffffff;
+  --btn-add-hover: #22c55e;       /* green-500 */
+
+  /* Unpost (orange) */
+  --btn-unpost-bg: #f97316;       /* orange-500 */
+  --btn-unpost-fg: #ffffff;
+  --btn-unpost-hover: #ea580c;    /* orange-600 */
+
+  /* Post (purple) – alias to accent tokens for consistency */
+  --btn-post-bg: var(--btn-accent-bg);
+  --btn-post-fg: var(--btn-accent-fg);
+  --btn-post-hover: var(--btn-accent-hover);
+
+  /* Scoped text overrides (light mode defaults) */
+  --btn-edit-fg: #ffffff;         /* Edit/Fork text in light */
+  --btn-save-fg: #ffffff;         /* Save text in light */
+  --btn-download-fg: #ffffff;     /* Download text in light */
+
+  /* --- New tokens --- */
+  /* Loop (cyan) */
+  --btn-loop-bg: #06b6d4;         /* cyan-500 */
+  --btn-loop-fg: #ffffff;
+  --btn-loop-hover: #0891b2;      /* cyan-600 */
+
+  /* Warning (amber) */
+  --btn-warning-bg: #f59e0b;      /* amber-500 */
+  --btn-warning-fg: #111827;      /* dark text in light mode */
+  --btn-warning-hover: #d97706;   /* amber-600 */
+
+  /* Refresh (sky) */
+  --btn-refresh-bg: #0ea5e9;      /* sky-500 */
+  --btn-refresh-fg: #ffffff;
+  --btn-refresh-hover: #0284c7;   /* sky-600 */
+
+  /* Grid line colours */
+  --grid-hline: rgba(0,0,0,0.08);      /* horizontal lane separators */
+  --grid-minor-vline: rgba(0,0,0,0.06);/* 1/4 beat lines */
+  --grid-major-vline: rgba(0,0,0,0.12);/* 1-beat lines */
+}
+
+/* Dark-mode tokens */
+html.theme-dark,
+body.theme-dark {
+  /* Inputs */
+  --input-bg: #0f172a;            /* slate-900 */
+  --input-fg: #f9fafb;            /* gray-50 */
+  --input-border: #334155;        /* slate-700 */
+  --input-placeholder: #94a3b8;   /* slate-400 */
+  --input-ring: #60a5fa;          /* blue-400 */
+
+  /* Buttons (neutral) */
+  --btn-bg: #0f172a;              /* slate-900 */
+  --btn-fg: #f9fafb;              /* gray-50 */
+  --btn-border: #334155;          /* slate-700 */
+  --btn-hover: #1f2937;           /* gray-800 */
+
+  /* Primary */
+  --btn-primary-bg: #3b82f6;      /* blue-500 */
+  --btn-primary-fg: #ffffff;
+  --btn-primary-hover: #2563eb;   /* blue-600 */
+
+  /* Destructive */
+  --btn-danger-bg: #ef4444;       /* red-500 */
+  --btn-danger-fg: #0b0f1a;       /* black text in dark */
+  --btn-danger-hover: #dc2626;    /* red-600 */
+
+  /* Accent (Post = purple) */
+  --btn-accent-bg: #8b5cf6;       /* violet-500 */
+  --btn-accent-fg: #ffffff;
+  --btn-accent-hover: #7c3aed;    /* violet-600 */
+
+  /* Info (Download = indigo) */
+  --btn-info-bg: #818cf8;         /* indigo-400/500 */
+  --btn-info-fg: #ffffff;
+  --btn-info-hover: #6366f1;      /* indigo-500/600 */
+
+  /* Play (black text to match others) */
+  --btn-play-bg: #22c55e;         /* green-500 */
+  --btn-play-fg: #0b0f1a;         /* black text */
+  --btn-play-hover: #16a34a;      /* green-600 */
+
+  /* Add to Rack (still paler than play) */
+  --btn-add-bg: #86efac;          /* green-300 */
+  --btn-add-fg: #0b0f1a;          /* black text */
+  --btn-add-hover: #4ade80;       /* green-400 */
+
+  /* Unpost (black text to match) */
+  --btn-unpost-bg: #fb923c;       /* orange-400/500 */
+  --btn-unpost-fg: #0b0f1a;       /* black text */
+  --btn-unpost-hover: #f97316;    /* orange-500/600 */
+
+  /* Post (purple) – keep bg from accent, force black text in dark mode */
+  --btn-post-bg: var(--btn-accent-bg);
+  --btn-post-fg: #0b0f1a;         /* black text */
+  --btn-post-hover: var(--btn-accent-hover);
+
+  /* Scoped text overrides (dark mode) */
+  --btn-edit-fg: #0b0f1a;         /* Edit/Fork black text in dark */
+  --btn-save-fg: #0b0f1a;         /* Save black text in dark */
+  --btn-download-fg: #0b0f1a;     /* Download black text in dark */
+
+  /* --- Dark overrides for new tokens --- */
+  --btn-loop-bg: #22d3ee;         /* cyan-400/500 */
+  --btn-loop-fg: #0b0f1a;         /* black text */
+  --btn-loop-hover: #06b6d4;
+
+  --btn-warning-bg: #fbbf24;      /* amber-400/500 */
+  --btn-warning-fg: #0b0f1a;      /* black text */
+  --btn-warning-hover: #f59e0b;
+
+  --btn-refresh-bg: #38bdf8;      /* sky-400/500 */
+  --btn-refresh-fg: #0b0f1a;      /* black text */
+  --btn-refresh-hover: #0ea5e9;
+
+  /* Grid line colours (dark) */
+  --grid-hline: rgba(255,255,255,0.14);
+  --grid-minor-vline: rgba(255,255,255,0.10); /* brighter in dark */
+  --grid-major-vline: rgba(255,255,255,0.20);
+
+  color-scheme: dark;
+}
+
+/* =============================================================
+   INPUTS
+   ============================================================= */
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="url"],
+input[type="tel"],
+select,
+textarea {
+  background-color: var(--input-bg) !important;
+  color: var(--input-fg) !important;
+  border: 1px solid var(--input-border) !important;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  outline: none;
+}
+input::placeholder,
+textarea::placeholder { color: var(--input-placeholder) !important; opacity: 1; }
+input:focus, select:focus, textarea:focus {
+  box-shadow: 0 0 0 2px var(--input-ring);
+  border-color: var(--input-ring) !important;
+}
+input:disabled, select:disabled, textarea:disabled { opacity: 0.65; cursor: not-allowed; }
+input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill {
+  -webkit-text-fill-color: var(--input-fg) !important;
+  -webkit-box-shadow: 0 0 0px 1000px var(--input-bg) inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+@supports (-webkit-overflow-scrolling: touch) {
+  html.theme-dark input, body.theme-dark input { -webkit-appearance: none; appearance: none; }
+}
+
+/* =============================================================
+   BUTTONS (normalise + variants)
+   ============================================================= */
+button,
+.btn {
+  background-color: var(--btn-bg) !important;
+  color: var(--btn-fg) !important;
+  border: 1px solid var(--btn-border) !important;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+button:hover, .btn:hover { background-color: var(--btn-hover) !important; }
+button:focus, .btn:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--input-ring, #3b82f6);
+  border-color: var(--input-ring, #3b82f6) !important;
+}
+button:disabled, .btn:disabled { opacity: 0.65; cursor: not-allowed; }
+
+/* Primary */
+.btn-primary {
+  background-color: var(--btn-primary-bg) !important;
+  color: var(--btn-primary-fg) !important;
+  border-color: var(--btn-primary-bg) !important;
+}
+.btn-primary:hover {
+  background-color: var(--btn-primary-hover) !important;
+  border-color: var(--btn-primary-hover) !important;
+}
+
+/* Ghost */
+.btn-ghost { background-color: transparent !important; color: var(--btn-fg) !important; border-color: transparent !important; }
+.btn-ghost:hover { background-color: var(--btn-hover) !important; }
+
+/* Destructive (aliases for Delete/Remove) */
+.btn-danger,
+.btn-delete,
+.btn-remove {
+  background-color: var(--btn-danger-bg) !important;
+  color: var(--btn-danger-fg) !important;
+  border-color: var(--btn-danger-bg) !important;
+}
+.btn-danger:hover,
+.btn-delete:hover,
+.btn-remove:hover {
+  background-color: var(--btn-danger-hover) !important;
+  border-color: var(--btn-danger-hover) !important;
+}
+
+/* Accent (Post = purple) */
+.btn-accent,
+.btn-post {
+  background-color: var(--btn-post-bg) !important;
+  color: var(--btn-post-fg) !important;
+  border-color: var(--btn-post-bg) !important;
+}
+.btn-accent:hover,
+.btn-post:hover {
+  background-color: var(--btn-post-hover) !important;
+  border-color: var(--btn-post-hover) !important;
+}
+
+/* Info (Download = indigo) */
+.btn-info {
+  background-color: var(--btn-info-bg) !important;
+  color: var(--btn-info-fg) !important;
+  border-color: var(--btn-info-bg) !important;
+}
+.btn-info:hover {
+  background-color: var(--btn-info-hover) !important;
+  border-color: var(--btn-info-hover) !important;
+}
+
+/* Play (green) */
+.btn-play {
+  background-color: var(--btn-play-bg) !important;
+  color: var(--btn-play-fg) !important;
+  border-color: var(--btn-play-bg) !important;
+}
+.btn-play:hover {
+  background-color: var(--btn-play-hover) !important;
+  border-color: var(--btn-play-hover) !important;
+}
+
+/* Add to Rack (paler green) */
+.btn-add {
+  background-color: var(--btn-add-bg) !important;
+  color: var(--btn-add-fg) !important;
+  border-color: var(--btn-add-bg) !important;
+}
+.btn-add:hover {
+  background-color: var(--btn-add-hover) !important;
+  border-color: var(--btn-add-hover) !important;
+}
+
+/* Unpost (orange) */
+.btn-unpost {
+  background-color: var(--btn-unpost-bg) !important;
+  color: var(--btn-unpost-fg) !important;
+  border-color: var(--btn-unpost-bg) !important;
+}
+.btn-unpost:hover {
+  background-color: var(--btn-unpost-hover) !important;
+  border-color: var(--btn-unpost-hover) !important;
+}
+
+/* Edit/Fork: blue with inverted text in dark mode */
+.btn-primary.btn-edit { color: var(--btn-edit-fg) !important; }
+
+/* Save + Download: black text in dark, white in light (scoped) */
+.btn-primary.btn-save  { color: var(--btn-save-fg) !important; }
+.btn-info.btn-download { color: var(--btn-download-fg) !important; }
+
+/* --- New variants --- */
+.btn-stop {
+  /* Alias to existing danger (delete) */
+  background-color: var(--btn-danger-bg) !important;
+  color: var(--btn-danger-fg) !important;
+  border-color: var(--btn-danger-bg) !important;
+}
+.btn-stop:hover {
+  background-color: var(--btn-danger-hover) !important;
+  border-color: var(--btn-danger-hover) !important;
+}
+
+.btn-loop {
+  background-color: var(--btn-loop-bg) !important;
+  color: var(--btn-loop-fg) !important;
+  border-color: var(--btn-loop-bg) !important;
+}
+.btn-loop:hover {
+  background-color: var(--btn-loop-hover) !important;
+  border-color: var(--btn-loop-hover) !important;
+}
+
+.btn-warning {
+  background-color: var(--btn-warning-bg) !important;
+  color: var(--btn-warning-fg) !important;
+  border-color: var(--btn-warning-bg) !important;
+}
+.btn-warning:hover {
+  background-color: var(--btn-warning-hover) !important;
+  border-color: var(--btn-warning-hover) !important;
+}
+
+.btn-refresh {
+  background-color: var(--btn-refresh-bg) !important;
+  color: var(--btn-refresh-fg) !important;
+  border-color: var(--btn-refresh-bg) !important;
+}
+.btn-refresh:hover {
+  background-color: var(--btn-refresh-hover) !important;
+  border-color: var(--btn-refresh-hover) !important;
+}
+
+/* =========================
+   PANELS + CHANNEL RACK
+   ========================= */
+
+/* --- Extra tokens for panels + rack --- */
+:root {
+  /* Generic panel (Synth param box, Channel Rack) */
+  --panel-bg: #ffffff;
+  --panel-fg: #111827;
+  --panel-border: #e5e7eb;
+  --panel-elevation: 0 8px 24px rgba(0,0,0,0.18);
+
+  /* Channel rack step colours (light) */
+  --rack-step: #e5e7eb;                 /* empty */
+  --rack-step-active: #22c55e;          /* active hit */
+  --rack-step-current: #f59e0b;         /* playhead outline */
+  --rack-step-active-current: #84cc16;  /* active + playhead */
+}
+html.theme-dark,
+body.theme-dark {
+  --panel-bg: #0b0f1a;                  /* near-black panel */
+  --panel-fg: #f3f4f6;
+  --panel-border: #1f2937;
+  --panel-elevation: 0 10px 28px rgba(0,0,0,0.6);
+
+  /* Channel rack step colours (dark) */
+  --rack-step: #374151;
+  --rack-step-active: #22c55e;
+  --rack-step-current: #f59e0b;
+  --rack-step-active-current: #a3e635;
+}
+
+/* =========================
+   Synth parameter box
+   ========================= */
+/* Add className="param-box" (or "synth-param-box" / "parameters-panel") to the wrapper */
+.param-box,
+.synth-param-box,
+.parameters-panel {
+  background: var(--panel-bg) !important;
+  color: var(--panel-fg) !important;
+  border: 1px solid var(--panel-border) !important;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  box-shadow: var(--panel-elevation);
+}
+
+/* Inputs inside the param box follow the global input tokens */
+.param-box input,
+.param-box select,
+.param-box textarea,
+.synth-param-box input,
+.synth-param-box select,
+.synth-param-box textarea,
+.parameters-panel input,
+.parameters-panel select,
+.parameters-panel textarea {
+  background-color: var(--input-bg) !important;
+  color: var(--input-fg) !important;
+  border: 1px solid var(--input-border) !important;
+}
+
+/* Optional section headings inside the param box */
+.param-box .section-title,
+.synth-param-box .section-title,
+.parameters-panel .section-title {
+  color: var(--panel-fg);
+  opacity: 0.9;
+  font-weight: 600;
+  margin: 0 0 0.35rem 0;
+}
+
+/* =========================
+   Channel Rack
+   ========================= */
+/* Add className="channel-rack" to the rack container */
+.channel-rack {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 420px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--panel-bg);
+  color: var(--panel-fg);
+  border: 1px solid var(--panel-border);
+  padding: 12px;
+  box-shadow: var(--panel-elevation);
+  z-index: 1000;
+  border-radius: 10px;
+}
+
+.channel-rack__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.channel-rack__title {
+  margin: 0;
+  font-weight: 700;
+}
+
+.channel-rack__controls {
+  margin-bottom: 10px;
+}
+
+.channel-rack__controls input[type="range"] {
+  width: 100%;
+}
+
+/* Label editor input */
+.channel-rack input[type="text"] {
+  width: 150px;
+  margin-right: 10px;
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: 0.5rem;
+  padding: 4px 8px;
+}
+
+/* Step grid and cells: add className="step-grid" and "step" (plus state classes) */
+.channel-rack .step-grid {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.channel-rack .step {
+  width: 100%;
+  padding-top: 100%;
+  position: relative;
+  background: var(--rack-step);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: transform 0.06s ease, box-shadow 0.12s ease, background-color 0.12s ease;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+}
+.theme-dark .channel-rack .step {
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
+}
+
+.channel-rack .step:hover { transform: translateY(-1px); }
+
+/* States:
+   - .is-active = user toggled on
+   - .is-current = transport playhead at this step
+*/
+.channel-rack .step.is-active { background: var(--rack-step-active); }
+.channel-rack .step.is-current { outline: 2px solid var(--rack-step-current); outline-offset: -2px; }
+.channel-rack .step.is-active.is-current {
+  background: var(--rack-step-active-current);
+  outline-color: transparent;
+}
+
+/* Absolutely-positioned inner fill if you use one */
+.channel-rack .step > .fill { position: absolute; inset: 0; }
+
+/* Channel row spacing */
+.channel-rack .channel {
+  margin-bottom: 15px;
+  border-bottom: 1px dashed var(--panel-border);
+  padding-bottom: 10px;
+}
+.channel-rack .channel:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* Rack header buttons can just reuse your tokenised .btn variants */
+.channel-rack button {
+  /* inherit global .btn tokens if you add class="btn ..." to the buttons */
+}

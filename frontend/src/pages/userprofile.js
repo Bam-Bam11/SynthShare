@@ -390,52 +390,54 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
   if (!user) return <p>Loading user...</p>;
 
   return (
-    <div style={{ padding: '20px' }}>
+    <div className="p-5">
       <h2>Profile: {user.username}</h2>
       <p>User ID: {user.id}</p>
 
       {/* follower stats from backend */}
-      <p style={{ marginTop: 6, color: '#555' }}>
-        <Link to={`/profile/${user.username}/followers`} style={{ textDecoration: 'none' }}>
+      <p className="mt-1 text-gray-600 dark:text-gray-300">
+        <Link to={`/profile/${user.username}/followers`} className="no-underline">
           Followers: <strong>{followerCount}</strong>
         </Link>
         &nbsp;|&nbsp;
-        <Link to={`/profile/${user.username}/following`} style={{ textDecoration: 'none' }}>
+        <Link to={`/profile/${user.username}/following`} className="no-underline">
           Following: <strong>{followingCount}</strong>
         </Link>
       </p>
 
       {!isSelfProfile && (
         isFollowing ? (
-          <button onClick={handleUnfollow} disabled={followBusy}>Unfollow</button>
+          <button className="btn btn-ghost" onClick={handleUnfollow} disabled={followBusy}>Unfollow</button>
         ) : (
-          <button onClick={handleFollow} disabled={followBusy}>Follow</button>
+          <button className="btn btn-primary" onClick={handleFollow} disabled={followBusy}>Follow</button>
         )
       )}
 
       {/* Posted Patches */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 20 }}>
-        <h3 style={{ margin: 0 }}>Posted Patches</h3>
+      <div className="flex items-baseline gap-3 mt-5">
+        <h3 className="m-0">Posted Patches</h3>
         <Link to={`/users/${user.username}/posted`}>View all posted</Link>
       </div>
       {patches.length > 0 ? (
         <ul>
           {patches.map(patch => (
-            <li key={patch.id}>
+            <li key={patch.id} className="mb-2">
               <strong>
-                <Link to={`/patches/${patch.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
+                <Link to={`/patches/${patch.id}`} className="no-underline text-blue-600 dark:text-blue-400">
                   {patch.name}
                 </Link>
               </strong>{' '}
               ({new Date(patch.created_at).toLocaleString()})
-              <button style={{ marginLeft: '10px' }} onClick={() => PlayPatch(patch)}>Play</button>
-              <button style={{ marginLeft: '10px' }} onClick={() => assignPatchToFirstEmptyChannel(patch)}>Add to Rack</button>
-              {isSelfProfile && (
-                <>
-                  <button style={{ marginLeft: '10px' }} onClick={() => handleUnpostPatch(patch.id)}>Unpost</button>
-                  <button style={{ marginLeft: '10px' }} onClick={() => handleDeletePatch(patch.id)}>Delete</button>
-                </>
-              )}
+              <span className="inline-flex flex-wrap gap-2 ml-2">
+                <button className="btn btn-play" onClick={() => PlayPatch(patch)}>Play</button>
+                <button className="btn btn-add" onClick={() => assignPatchToFirstEmptyChannel(patch)}>Add to Rack</button>
+                {isSelfProfile && (
+                  <>
+                    <button className="btn btn-unpost" onClick={() => handleUnpostPatch(patch.id)}>Unpost</button>
+                    <button className="btn btn-danger" onClick={() => handleDeletePatch(patch.id)}>Delete</button>
+                  </>
+                )}
+              </span>
             </li>
           ))}
         </ul>
@@ -446,26 +448,28 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
       {/* Saved Patches (self only) */}
       {isSelfProfile && (
         <>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 24 }}>
-            <h3 style={{ margin: 0 }}>Saved Patches</h3>
+          <div className="flex items-baseline gap-3 mt-6">
+            <h3 className="m-0">Saved Patches</h3>
             <Link to={`/users/${user.username}/saved`}>View all saved</Link>
           </div>
           {savedPatches.length > 0 ? (
             <ul>
               {savedPatches.map(patch => (
-                <li key={patch.id}>
+                <li key={patch.id} className="mb-2">
                   <strong>
-                    <Link to={`/patches/${patch.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
+                    <Link to={`/patches/${patch.id}`} className="no-underline text-blue-600 dark:text-blue-400">
                       {patch.name}
                     </Link>
                   </strong>{' '}
                   ({new Date(patch.created_at).toLocaleString()})
-                  <button style={{ marginLeft: '10px' }} onClick={() => PlayPatch(patch)}>Play</button>
-                  <button style={{ marginLeft: '10px' }} onClick={() => assignPatchToFirstEmptyChannel(patch)}>Add to Rack</button>
-                  {!patch.is_posted && (
-                    <button style={{ marginLeft: '10px' }} onClick={() => handlePostPatch(patch.id)}>Post</button>
-                  )}
-                  <button style={{ marginLeft: '10px' }} onClick={() => handleDeletePatch(patch.id)}>Delete</button>
+                  <span className="inline-flex flex-wrap gap-2 ml-2">
+                    <button className="btn btn-play" onClick={() => PlayPatch(patch)}>Play</button>
+                    <button className="btn btn-add" onClick={() => assignPatchToFirstEmptyChannel(patch)}>Add to Rack</button>
+                    {!patch.is_posted && (
+                      <button className="btn btn-post" onClick={() => handlePostPatch(patch.id)}>Post</button>
+                    )}
+                    <button className="btn btn-danger" onClick={() => handleDeletePatch(patch.id)}>Delete</button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -476,28 +480,30 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
       )}
 
       {/* Posted Tracks */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 28 }}>
-        <h3 style={{ margin: 0 }}>Posted Tracks</h3>
+      <div className="flex items-baseline gap-3 mt-7">
+        <h3 className="m-0">Posted Tracks</h3>
       </div>
       {postedTracks.length > 0 ? (
         <ul>
           {postedTracks.map(t => (
-            <li key={t.id}>
+            <li key={t.id} className="mb-2">
               <strong>
-                <Link to={`/tracks/${t.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
+                <Link to={`/tracks/${t.id}`} className="no-underline text-blue-600 dark:text-blue-400">
                   {t.name || `Track ${t.id}`}
                 </Link>
               </strong>{' '}
               ({new Date(t.created_at).toLocaleString()})
-              <button style={{ marginLeft: 10 }} onClick={() => handlePlayTrack(t.id)}>
-                {previewingId === t.id ? 'Stop' : 'Play'}
-              </button>
-              {isSelfProfile && (
-                <>
-                  <button style={{ marginLeft: 10 }} onClick={() => handleUnpostTrack(t.id)}>Unpost</button>
-                  <button style={{ marginLeft: 10 }} onClick={() => handleDeleteTrack(t.id)}>Delete</button>
-                </>
-              )}
+              <span className="inline-flex flex-wrap gap-2 ml-2">
+                <button className="btn btn-play" onClick={() => handlePlayTrack(t.id)}>
+                  {previewingId === t.id ? 'Stop' : 'Play'}
+                </button>
+                {isSelfProfile && (
+                  <>
+                    <button className="btn btn-unpost" onClick={() => handleUnpostTrack(t.id)}>Unpost</button>
+                    <button className="btn btn-danger" onClick={() => handleDeleteTrack(t.id)}>Delete</button>
+                  </>
+                )}
+              </span>
             </li>
           ))}
         </ul>
@@ -508,28 +514,30 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
       {/* Saved Tracks (self only) */}
       {isSelfProfile && (
         <>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 24 }}>
-            <h3 style={{ margin: 0 }}>Saved Tracks</h3>
+          <div className="flex items-baseline gap-3 mt-6">
+            <h3 className="m-0">Saved Tracks</h3>
           </div>
           {savedTracks.length > 0 ? (
             <ul>
               {savedTracks.map(t => (
-                <li key={t.id}>
+                <li key={t.id} className="mb-2">
                   <strong>
-                    <Link to={`/tracks/${t.id}`} style={{ textDecoration: 'none', color: 'blue' }}>
+                    <Link to={`/tracks/${t.id}`} className="no-underline text-blue-600 dark:text-blue-400">
                       {t.name || `Track ${t.id}`}
                     </Link>
                   </strong>{' '}
                   ({new Date(t.created_at).toLocaleString()})
-                  <button style={{ marginLeft: 10 }} onClick={() => handlePlayTrack(t.id)}>
-                    {previewingId === t.id ? 'Stop' : 'Play'}
-                  </button>
-                  {t.uploaded_by_id === currentUserId && !t.is_posted && (
-                    <button style={{ marginLeft: 10 }} onClick={() => handlePostTrack(t.id)}>Post</button>
-                  )}
-                  {t.uploaded_by_id === currentUserId && (
-                    <button style={{ marginLeft: 10 }} onClick={() => handleDeleteTrack(t.id)}>Delete</button>
-                  )}
+                  <span className="inline-flex flex-wrap gap-2 ml-2">
+                    <button className="btn btn-play" onClick={() => handlePlayTrack(t.id)}>
+                      {previewingId === t.id ? 'Stop' : 'Play'}
+                    </button>
+                    {t.uploaded_by_id === currentUserId && !t.is_posted && (
+                      <button className="btn btn-post" onClick={() => handlePostTrack(t.id)}>Post</button>
+                    )}
+                    {t.uploaded_by_id === currentUserId && (
+                      <button className="btn btn-danger" onClick={() => handleDeleteTrack(t.id)}>Delete</button>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
