@@ -29,12 +29,12 @@ const PatchLineageGraph = ({ patchId }) => {
     fetchLineage();
   }, [patchId]);
 
+  // Build display nodes with ghost placeholders for missing endpoints
   const displayNodes = useMemo(() => {
     const byId = new Map();
     (nodes || []).forEach(n => byId.set(n.id, { ...n, isGhost: false }));
 
     const ghostCountFor = new Map();
-
     const addGhost = (id, anchor, direction = -1) => {
       const count = (ghostCountFor.get(anchor.id) || 0) + 1;
       ghostCountFor.set(anchor.id, count);
@@ -51,7 +51,7 @@ const PatchLineageGraph = ({ patchId }) => {
           version: null,
           is_posted: false,
           isCurrent: false,
-          isGhost: true
+          isGhost: true,
         });
       }
     };
@@ -73,6 +73,7 @@ const PatchLineageGraph = ({ patchId }) => {
     return m;
   }, [displayNodes]);
 
+  // Check which nodes are linkable
   const [linkable, setLinkable] = useState(new Set());
   useEffect(() => {
     let cancelled = false;
@@ -90,19 +91,15 @@ const PatchLineageGraph = ({ patchId }) => {
     return () => { cancelled = true; };
   }, [displayNodes]);
 
+  // Zoom
   const handleWheel = (e) => {
     e.preventDefault();
     const scaleChange = e.deltaY > 0 ? 0.9 : 1.1;
-    setTransform(prev => {
-      const newScale = Math.max(0.2, Math.min(4, prev.scale * scaleChange));
-      return { ...prev, scale: newScale };
-    });
+    setTransform(prev => ({ ...prev, scale: Math.max(0.2, Math.min(4, prev.scale * scaleChange)) }));
   };
 
-  const handleMouseDown = (e) => {
-    dragging.current = true;
-    lastPos.current = { x: e.clientX, y: e.clientY };
-  };
+  // Pan
+  const handleMouseDown = (e) => { dragging.current = true; lastPos.current = { x: e.clientX, y: e.clientY }; };
   const handleMouseMove = (e) => {
     if (!dragging.current) return;
     const dx = e.clientX - lastPos.current.x;
@@ -112,6 +109,7 @@ const PatchLineageGraph = ({ patchId }) => {
   };
   const handleMouseUp = () => { dragging.current = false; };
 
+  // Geometry helpers
   const nodeVisualRadius = (n) => NODE_RADIUS + Math.min(n.downloads || 0, 30) * 0.5;
 
   const distancePointToSegment = (px, py, x1, y1, x2, y2) => {
@@ -140,7 +138,7 @@ const PatchLineageGraph = ({ patchId }) => {
   const curvedPath = (sx, sy, tx, ty, bias = 1) => {
     const mx = (sx + tx) / 2;
     const my = (sy + ty) / 2;
-    let dx = tx - sx, dy = ty - sy;
+    const dx = tx - sx, dy = ty - sy;
     const len = Math.hypot(dx, dy) || 1;
     const nx = -dy / len;
     const ny =  dx / len;
@@ -151,104 +149,118 @@ const PatchLineageGraph = ({ patchId }) => {
   };
 
   return (
-    <svg
-      ref={svgRef}
-      width="100%"
-      height="700"
-      style={{ border: '1px solid #ccc', cursor: dragging.current ? 'grabbing' : 'grab' }}
-      onWheel={handleWheel}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-    >
-      <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}>
+    <div className="lineage-graph">
+      <svg
+        ref={svgRef}
+        width="100%"
+        height="700"
+        style={{
+          border: '1px solid var(--panel-border)',
+          cursor: dragging.current ? 'grabbing' : 'grab',
+          background: 'transparent'
+        }}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        aria-label="Patch lineage graph"
+      >
+        <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}>
 
-        {(edges || []).map((edge, i) => {
-          const from = nodeById.get(edge.from);
-          const to = nodeById.get(edge.to);
-          if (!from || !to) return null;
+          {/* Edges (use CSS tokens) */}
+          {(edges || []).map((edge, i) => {
+            const from = nodeById.get(edge.from);
+            const to = nodeById.get(edge.to);
+            if (!from || !to) return null;
 
-          const stackedRank = to.sibling_rank || 1;
-          const mustCurve = stackedRank > 1 || edgeWouldHitNode(from, to);
+            const stackedRank = to.sibling_rank || 1;
+            const mustCurve = stackedRank > 1 || edgeWouldHitNode(from, to);
 
-          if (mustCurve) {
-            const d = curvedPath(from.x, from.y, to.x, to.y, stackedRank);
-            return <path key={i} d={d} stroke="gray" strokeWidth="2" fill="none" />;
-          }
+            if (mustCurve) {
+              const d = curvedPath(from.x, from.y, to.x, to.y, stackedRank);
+              return <path key={i} className="edge" d={d} strokeWidth="2" fill="none" />;
+            }
 
-          return <line key={i} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="gray" strokeWidth="2" />;
-        })}
+            return <line key={i} className="edge" x1={from.x} y1={from.y} x2={to.x} y2={to.y} strokeWidth="2" />;
+          })}
 
-        {displayNodes.map((node) => {
-          const r = nodeVisualRadius(node);
-          const linkAllowed = linkable.has(node.id);
-          const unavailable = !linkAllowed;
-          const fill = node.isCurrent ? '#3b82f6' : (unavailable ? '#f2f2f2' : '#d3d3d3');
-          const stroke = unavailable ? '#888' : '#000';
-          const dash = unavailable ? '6 4' : '0';
-          const label = `v${node.version ?? '?.?'}`;
+          {/* Nodes */}
+          {displayNodes.map((node) => {
+            const r = nodeVisualRadius(node);
+            const linkAllowed = linkable.has(node.id);
+            const unavailable = !linkAllowed;
 
-          return (
-            <g key={node.id}>
-              <circle
-                cx={node.x}
-                cy={node.y}
-                r={r}
-                fill={fill}
-                stroke={stroke}
-                strokeDasharray={dash}
-                strokeWidth="1"
-                onMouseEnter={() => setHovered(node)}
-                onMouseLeave={() => setHovered(null)}
-              />
-              {linkAllowed ? (
-                <a href={`/patches/${node.id}`}>
+            const fill = node.isCurrent ? 'var(--btn-primary-bg)' : 'var(--graph-node-bg)';
+            const stroke = 'var(--graph-node-stroke)';
+            const dash = unavailable ? '6 4' : undefined;
+            const label = `v${node.version ?? '?.?'}`;
+
+            return (
+              <g key={node.id}>
+                <circle
+                  cx={node.x}
+                  cy={node.y}
+                  r={r}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeDasharray={dash}
+                  strokeWidth="1"
+                  onMouseEnter={() => setHovered(node)}
+                  onMouseLeave={() => setHovered(null)}
+                />
+                {linkAllowed ? (
+                  <a href={`/patches/${node.id}`} style={{ pointerEvents: 'auto' }}>
+                    <text
+                      x={node.x}
+                      y={node.y - r - 6}
+                      textAnchor="middle"
+                      fontSize="11"
+                      className="version"
+                    >
+                      {label}
+                    </text>
+                  </a>
+                ) : (
                   <text
                     x={node.x}
                     y={node.y - r - 6}
                     textAnchor="middle"
-                    fontSize="10"
-                    fill="black"
-                    style={{ pointerEvents: 'auto' }}
+                    fontSize="11"
+                    className="version"
                   >
                     {label}
                   </text>
-                </a>
-              ) : (
-                <text
-                  x={node.x}
-                  y={node.y - r - 6}
-                  textAnchor="middle"
-                  fontSize="10"
-                  fill="#444"
-                >
-                  {label}
-                </text>
-              )}
-            </g>
-          );
-        })}
+                )}
+              </g>
+            );
+          })}
 
-        {hovered && (
-          <foreignObject x={hovered.x + 10} y={hovered.y - 30} width="220" height="70">
-            <div style={{
-              background: 'white',
-              border: '1px solid black',
-              padding: '4px',
-              borderRadius: '4px',
-              fontSize: '10px',
-              pointerEvents: 'none'
-            }}>
-              <strong>{hovered.name || 'Patch'}</strong><br />
-              {`v${hovered.version ?? '?.?'}`}<br />
-              {hovered.uploaded_by ? <em>by {hovered.uploaded_by}</em> : <em>unavailable</em>}
-            </div>
-          </foreignObject>
-        )}
+          {/* Tooltip (panel tokens) */}
+          {hovered && (
+            <foreignObject x={hovered.x + 10} y={hovered.y - 30} width="220" height="70">
+              <div
+                style={{
+                  background: 'var(--panel-bg)',
+                  color: 'var(--panel-fg)',
+                  border: '1px solid var(--panel-border)',
+                  padding: '4px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  boxShadow: 'var(--panel-elevation)',
+                  pointerEvents: 'none'
+                }}
+              >
+                <strong>{hovered.name || 'Patch'}</strong><br />
+                {`v${hovered.version ?? '?.?'}`}<br />
+                {hovered.uploaded_by ? <em>by {hovered.uploaded_by}</em> : <em>unavailable</em>}
+              </div>
+            </foreignObject>
+          )}
 
-      </g>
-    </svg>
+        </g>
+      </svg>
+    </div>
   );
 };
 

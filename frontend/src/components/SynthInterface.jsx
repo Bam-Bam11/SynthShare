@@ -169,8 +169,8 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
   }, []);
 
   /* =========================
-     Draw the analyser
-     ========================= */
+    Draw the analyser
+    ========================= */
   useEffect(() => {
     if (!analyser || !canvasRef.current) return;
 
@@ -178,27 +178,189 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     const ctx = canvas.getContext('2d');
     let raf;
 
-    const draw = () => {
-      const buffer = analyser.getValue();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.beginPath();
+    // Fixed reference frame settings with 0dB at top
+    const minDB = -100;
+    const maxDB = 0;
+    const dbRange = maxDB - minDB;
+    
+    // Margins for labels (significantly increased left margin)
+    const margin = {
+      top: 25,
+      right: 20,
+      bottom: 35,
+      left: 80  // Significantly increased from 55 to 80 for amplitude label
+    };
+    
+    const graphWidth = canvas.width - margin.left - margin.right;
+    const graphHeight = canvas.height - margin.top - margin.bottom;
 
-      const sliceWidth = canvas.width / buffer.length;
-      buffer.forEach((val, i) => {
-        const x = i * sliceWidth;
-        const y = (1 - (val + 140) / 140) * canvas.height;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+    // Track audio state
+    let isPlaying = false;
+    let lastAudioTime = 0;
+
+    // Draw static reference grid
+    const drawReferenceGrid = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Draw graph background
+      ctx.fillStyle = '#f8f9fa';
+      ctx.fillRect(margin.left, margin.top, graphWidth, graphHeight);
+      
+      // Vertical dB reference lines (evenly spaced)
+      ctx.strokeStyle = '#e0e0e0';
+      ctx.lineWidth = 1;
+      ctx.font = '10px monospace';
+      ctx.fillStyle = '#666';
+      ctx.textAlign = 'right';
+      
+      // dB levels from 0 to -80 in 20dB steps
+      const dbLevels = [0, -20, -40, -60, -80];
+      dbLevels.forEach(db => {
+        const normalized = (db - minDB) / dbRange;
+        const y = margin.top + (1 - normalized) * graphHeight;
+        
+        // Grid line
+        ctx.beginPath();
+        ctx.moveTo(margin.left, y);
+        ctx.lineTo(margin.left + graphWidth, y);
+        ctx.stroke();
+        
+        // Labels on left side (outside graph) - now plenty of space
+        ctx.fillText(`${db} dB`, margin.left - 10, y + 3);
       });
 
-      ctx.strokeStyle = 'blue';
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      // Horizontal frequency references
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#666';
+      const freqLevels = [100, 500, 1000, 2000, 5000, 10000];
+      freqLevels.forEach(freq => {
+        // Convert frequency to x position (logarithmic scale)
+        const logFreq = Math.log10(freq);
+        const logMin = Math.log10(50);
+        const logMax = Math.log10(18000);
+        const x = margin.left + ((logFreq - logMin) / (logMax - logMin)) * graphWidth;
+        
+        // Grid line
+        ctx.beginPath();
+        ctx.moveTo(x, margin.top);
+        ctx.lineTo(x, margin.top + graphHeight);
+        ctx.stroke();
+        
+        // Labels on bottom (outside graph)
+        const label = freq < 1000 ? `${freq}` : `${freq/1000}k`;
+        ctx.fillText(label, x, margin.top + graphHeight + 15);
+      });
 
-      raf = requestAnimationFrame(draw);
+      // Extreme frequency labels
+      ctx.fillText('0', margin.left, margin.top + graphHeight + 15);
+      ctx.fillText('20k', margin.left + graphWidth, margin.top + graphHeight + 15);
+
+      // Axis titles
+      ctx.textAlign = 'center';
+      ctx.fillText('Frequency (Hz)', canvas.width / 2, canvas.height - 10);
+      
+      // Vertical amplitude label - moved way to the left edge
+      ctx.save();
+      ctx.translate(15, canvas.height / 2); // Position at very left edge
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = 'center';
+      ctx.fillText('Amplitude (dB)', 0, 0);
+      ctx.restore();
+
+      // Graph border
+      ctx.strokeStyle = '#ccc';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(margin.left, margin.top, graphWidth, graphHeight);
     };
 
-    draw();
+    // Draw the dynamic spectrum
+    const drawSpectrum = () => {
+      const buffer = analyser.getValue();
+      
+      // Clear and redraw grid
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawReferenceGrid();
+
+      // Better audio detection - check for meaningful audio content
+      let totalMagnitude = 0;
+      let validPoints = 0;
+      
+      buffer.forEach(val => {
+        if (val < -1) { // Only count values below -1dB (not the flat 0dB line)
+          totalMagnitude += Math.abs(val);
+          validPoints++;
+        }
+      });
+      
+      const averageMagnitude = validPoints > 0 ? totalMagnitude / validPoints : 0;
+      const currentTime = Date.now();
+      
+      // More sensitive audio detection
+      const hasAudioContent = averageMagnitude > 5 && validPoints > 10; // Need significant audio
+      
+      if (hasAudioContent) {
+        isPlaying = true;
+        lastAudioTime = currentTime;
+      } else if (currentTime - lastAudioTime > 50) { // Short grace period
+        isPlaying = false;
+      }
+
+      // Only draw spectrum if we're actually playing meaningful audio
+      if (isPlaying) {
+        ctx.beginPath();
+        ctx.strokeStyle = 'blue';
+        ctx.lineWidth = 2;
+        
+        const sampleRate = 44100;
+        const logMin = Math.log10(50);
+        const logMax = Math.log10(18000);
+        
+        let firstPoint = true;
+        let pointsDrawn = 0;
+        
+        buffer.forEach((val, i) => {
+          const freq = (i / buffer.length) * (sampleRate / 2);
+          
+          // Skip frequencies outside our display range
+          if (freq < 50 || freq > 18000) return;
+          
+          // Skip points that are just the 0dB flat line
+          if (val >= -1) return;
+          
+          // Convert to logarithmic x position
+          const logFreq = Math.log10(freq);
+          const x = margin.left + ((logFreq - logMin) / (logMax - logMin)) * graphWidth;
+          
+          // Clamp dB values strictly to our reference frame
+          const clampedDB = Math.max(minDB, Math.min(maxDB, val));
+          const normalized = (clampedDB - minDB) / dbRange;
+          const y = margin.top + (1 - normalized) * graphHeight;
+          
+          // Ensure y is within graph bounds
+          const clampedY = Math.max(margin.top, Math.min(margin.top + graphHeight, y));
+          
+          if (firstPoint) {
+            ctx.moveTo(x, clampedY);
+            firstPoint = false;
+          } else {
+            ctx.lineTo(x, clampedY);
+          }
+          pointsDrawn++;
+        });
+        
+        // Only stroke if we have meaningful points
+        if (pointsDrawn > 5) {
+          ctx.stroke();
+        }
+      }
+
+      raf = requestAnimationFrame(drawSpectrum);
+    };
+
+    // Initial draw (just the grid, no spectrum)
+    drawReferenceGrid();
+    raf = requestAnimationFrame(drawSpectrum);
+    
     return () => cancelAnimationFrame(raf);
   }, [analyser]);
 
@@ -369,11 +531,7 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       alert('Failed to save patch.');
     }
   };
-
-  const handlePostPatch = async () => {
-    alert('Please post from the profile page after saving (unchanged workflow).');
-  };
-
+  
   const handleDownloadPatch = () => {
     const name = (patchName || 'untitled').trim();
     const parameters = {
@@ -547,7 +705,7 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
         <HzHelper valueHz={osc1Freq} />
         <SnapButtons onSnap={(hz) => setOsc1Freq(hz)} />
 
-        <label className="block mt-3">slideFrom (Hz, optional for glide)</label>
+        <label className="block mt-3">Slide from (Hz, optional for glide)</label>
         <input
           type="number"
           placeholder="none"
@@ -625,11 +783,11 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
           <option value="bandpass">Bandpass</option>
         </select>
 
-        <div>Resonance (Q): {resonance}</div>
+        <div>Resonance (Q): {resonance.toFixed(1)}</div>
         <input
           type="range"
-          min="0.1"
-          max="10"
+          min="0.5"
+          max="30"
           step="0.1"
           value={resonance}
           onChange={(e) => setResonance(parseFloat(e.target.value))}
@@ -734,7 +892,6 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
         {!hideNameAndDescription && (
           <>
             <button className="btn btn-primary btn-save" onClick={handleSavePatch}>Save patch</button>
-            <button className="btn btn-accent" onClick={handlePostPatch}>Post patch</button>
             <button className="btn btn-info btn-download" onClick={handleDownloadPatch}>Download patch</button>
           </>
         )}

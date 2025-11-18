@@ -562,3 +562,61 @@ body.theme-dark {
 .channel-rack button {
   /* inherit global .btn tokens if you add class="btn ..." to the buttons */
 }
+
+/* =========================
+   Lineage Graph (Patch + Track)
+   ========================= */
+
+/* Tokens for lineage graph */
+:root {
+  --graph-label-fg: #111827;                 /* text on light */
+  --graph-label-outline: rgba(255,255,255,0.9); /* halo for light bg */
+  --graph-edge: #4b5563;                     /* slate-600 */
+  --graph-node-bg: #ffffff;
+  --graph-node-stroke: #e5e7eb;              /* gray-200 */
+}
+html.theme-dark,
+body.theme-dark {
+  --graph-label-fg: #f3f4f6;                 /* text on dark */
+  --graph-label-outline: rgba(0,0,0,0.75);   /* halo for dark bg */
+  --graph-edge: #cbd5e1;                     /* slate-300 */
+  --graph-node-bg: #0b0f1a;                  /* near-black */
+  --graph-node-stroke: #374151;              /* gray-700 */
+}
+
+/* Base styles for SVG graphs (wrap with className="lineage-graph") */
+.lineage-graph svg text {
+  fill: var(--graph-label-fg) !important;
+  paint-order: stroke fill;                  /* draw halo behind fill for contrast */
+  stroke: var(--graph-label-outline);
+  stroke-width: 2px;
+  stroke-linejoin: round;
+  font-weight: 600;
+}
+
+/* Optional: if you tag version labels */
+.lineage-graph svg text.version,
+.lineage-graph .version-label {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+/* Edges/links */
+.lineage-graph svg path,
+.lineage-graph svg line,
+.lineage-graph svg .edge {
+  stroke: var(--graph-edge);
+}
+
+/* Nodes (if you use .node groups) */
+.lineage-graph svg .node rect,
+.lineage-graph svg .node circle {
+  fill: var(--graph-node-bg);
+  stroke: var(--graph-node-stroke);
+}
+
+/* If you render HTML labels via foreignObject */
+.lineage-graph .html-label {
+  color: var(--graph-label-fg);
+  text-shadow: 0 1px 2px var(--graph-label-outline);
+}

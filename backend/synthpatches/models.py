@@ -244,9 +244,6 @@ class Follow(models.Model):
 # Track implementation
 # --------------------------
 
-from django.db import models, transaction
-from django.contrib.auth.models import User
-
 class Track(models.Model):
     name = models.CharField(max_length=120)
     # Free-form user text (no more timeline data here)

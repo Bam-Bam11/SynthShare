@@ -27,13 +27,11 @@ const BTN = {
   warning: 'btn btn-warning',
   refresh: 'btn btn-refresh',
   save: 'btn btn-primary btn-save',
-  post: 'btn btn-post',                 // alias of .btn-accent with dark-mode text fix
   download: 'btn btn-info btn-download',
   neutral: 'btn',                       // default neutral button
   ghost: 'btn-ghost',
   danger: 'btn btn-danger',
   add: 'btn btn-add',
-  unpost: 'btn btn-unpost',
   disabled: 'opacity-60 cursor-not-allowed',
 };
 
@@ -91,10 +89,12 @@ const normalizeServerPatch = (p, idOverride = null) => {
   };
 };
 
-// sync load draft once
-const loadDraft = () => {
+// sync load draft once - NOW USER-SCOPED
+const loadDraft = async () => {
   try {
-    const raw = localStorage.getItem(DRAFT_KEY);
+    const userId = await getCurrentUserId();
+    const userDraftKey = `${DRAFT_KEY}_${userId}`;
+    const raw = localStorage.getItem(userDraftKey);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -168,38 +168,66 @@ export default function ComposePanel() {
   const rack = useChannelRack();
   const channels = Array.isArray(rack.channels) ? rack.channels : [];
 
-  const draft = loadDraft();
+  // State for draft loading
+  const [draft, setDraft] = useState(null);
+  const [draftLoaded, setDraftLoaded] = useState(false);
+
+  // Load user-scoped draft on component mount
+  useEffect(() => {
+    const loadUserDraft = async () => {
+      try {
+        const userDraft = await loadDraft();
+        setDraft(userDraft);
+      } catch (error) {
+        console.warn('Could not load user draft:', error);
+        setDraft(null);
+      } finally {
+        setDraftLoaded(true);
+      }
+    };
+    loadUserDraft();
+  }, []);
 
   // ---- core timeline state ----
-  const [bpm, setBpm] = useState(
-    typeof draft?.bpm === 'number' ? draft.bpm : DEFAULT_BPM
-  );
-  const [lanes, setLanes] = useState(
-    typeof draft?.lanes === 'number' ? Math.max(LANES_MIN, draft.lanes) : LANES_MIN
-  );
-  const [pxPerBeat, setPxPerBeat] = useState(
-    typeof draft?.pxPerBeat === 'number' ? Math.max(10, draft.pxPerBeat) : INITIAL_PX_PER_BEAT
-  );
-  const [lengthBeats, setLengthBeats] = useState(
-    typeof draft?.lengthBeats === 'number' ? Math.max(1, draft.lengthBeats) : DEFAULT_BEATS
-  );
-  const [clips, setClips] = useState(
-    Array.isArray(draft?.clips) ? draft.clips : []
-  );
+  const [bpm, setBpm] = useState(DEFAULT_BPM);
+  const [lanes, setLanes] = useState(LANES_MIN);
+  const [pxPerBeat, setPxPerBeat] = useState(INITIAL_PX_PER_BEAT);
+  const [lengthBeats, setLengthBeats] = useState(DEFAULT_BEATS);
+  const [clips, setClips] = useState([]);
 
   // lane metadata (name/color/mute/solo)
-  const [laneMeta, setLaneMeta] = useState(() => {
-    const arr = Array.isArray(draft?.laneMeta) ? draft.laneMeta : [];
-    return Array.from({ length: Math.max(lanes, arr.length || 0) }).map((_, i) => arr[i] ?? defaultLaneMeta(i));
-  });
+  const [laneMeta, setLaneMeta] = useState(() => 
+    Array.from({ length: LANES_MIN }, (_, i) => defaultLaneMeta(i))
+  );
 
-  // project meta + save/post
-  const [projectName, setProjectName] = useState(draft?.projectName || 'Untitled');
-  const [projectDesc, setProjectDesc] = useState(draft?.projectDesc || ''); // user-facing description
+  // project meta + save
+  const [projectName, setProjectName] = useState('Untitled');
+  const [projectDesc, setProjectDesc] = useState('');
   const [saving, setSaving] = useState(false);
-  const [posting, setPosting] = useState(false);
   const [trackId, setTrackId] = useState(null);
-  const [isPosted, setIsPosted] = useState(false);
+
+  // Initialize state from draft once it's loaded
+  useEffect(() => {
+    if (draftLoaded && draft) {
+      setBpm(typeof draft.bpm === 'number' ? draft.bpm : DEFAULT_BPM);
+      setLanes(typeof draft.lanes === 'number' ? Math.max(LANES_MIN, draft.lanes) : LANES_MIN);
+      setPxPerBeat(typeof draft.pxPerBeat === 'number' ? Math.max(10, draft.pxPerBeat) : INITIAL_PX_PER_BEAT);
+      setLengthBeats(typeof draft.lengthBeats === 'number' ? Math.max(1, draft.lengthBeats) : DEFAULT_BEATS);
+      setClips(Array.isArray(draft.clips) ? draft.clips : []);
+      setProjectName(draft.projectName || 'Untitled');
+      setProjectDesc(draft.projectDesc || '');
+      
+      // Initialize laneMeta from draft or create defaults
+      if (Array.isArray(draft.laneMeta) && draft.laneMeta.length > 0) {
+        const draftLanes = typeof draft.lanes === 'number' ? Math.max(LANES_MIN, draft.lanes) : LANES_MIN;
+        const laneMetaFromDraft = draft.laneMeta.slice(0, draftLanes);
+        while (laneMetaFromDraft.length < draftLanes) {
+          laneMetaFromDraft.push(defaultLaneMeta(laneMetaFromDraft.length));
+        }
+        setLaneMeta(laneMetaFromDraft);
+      }
+    }
+  }, [draftLoaded, draft]);
 
   // If we came from /tracks/:id/edit, capture the id from route
   const { id: routeTrackId } = useParams();
@@ -219,24 +247,34 @@ export default function ComposePanel() {
     });
   }, [lanes]);
 
-  // ---- persist auto-draft on change ----
+  // ---- persist auto-draft on change - NOW USER-SCOPED ----
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        DRAFT_KEY,
-        JSON.stringify({
-          projectName,
-          projectDesc,
-          bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta
-        })
-      );
-    } catch (e) {
-      console.warn('Failed to save track draft', e);
-    }
-  }, [projectName, projectDesc, bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta]);
+    if (!draftLoaded) return;
+    
+    const persistDraft = async () => {
+      try {
+        const userId = await getCurrentUserId();
+        const userDraftKey = `${DRAFT_KEY}_${userId}`;
+        localStorage.setItem(
+          userDraftKey,
+          JSON.stringify({
+            projectName,
+            projectDesc,
+            bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta
+          })
+        );
+      } catch (e) {
+        console.warn('Failed to save user track draft', e);
+      }
+    };
+
+    persistDraft();
+  }, [projectName, projectDesc, bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta, draftLoaded]);
 
   // ---- load seed from TrackDetail (fork/edit) and capture lineage ----
   useEffect(() => {
+    if (!draftLoaded) return;
+    
     try {
       const raw = localStorage.getItem('trackToLoad');
       if (!raw) return;
@@ -294,7 +332,7 @@ export default function ComposePanel() {
       try { localStorage.removeItem('trackToLoad'); } catch {}
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [draftLoaded]);
 
   // ---- derived layout/time ----
   const secPerBeat = 60 / bpm;
@@ -515,7 +553,7 @@ export default function ComposePanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loopEnabled, loopRegion]);
 
-  // ===== CHANGED: scheduleAndStart with just-in-time enrichment =====
+  // ===== scheduleAndStart with just-in-time enrichment =====
   const scheduleAndStart = async () => {
     await Tone.start();
     const transport = Tone.getTransport();
@@ -677,8 +715,8 @@ export default function ComposePanel() {
     cancelAnimationFrame(rafRef.current);
   };
 
-  // ---- NEW: Start New Project (clear state) ----
-  const startNewProject = () => {
+  // ---- Start New Project (clear state) ----
+  const startNewProject = async () => {
     try {
       const t = Tone.getTransport();
       t.stop();
@@ -714,10 +752,13 @@ export default function ComposePanel() {
     // clear lineage / server link
     lineageRef.current = { root: null, stem: null };
     setTrackId(null);
-    setIsPosted(false);
 
     // clear local persisted draft + any pending seed
-    try { localStorage.removeItem(DRAFT_KEY); } catch {}
+    try { 
+      const userId = await getCurrentUserId();
+      const userDraftKey = `${DRAFT_KEY}_${userId}`;
+      localStorage.removeItem(userDraftKey); 
+    } catch {}
     try { localStorage.removeItem('trackToLoad'); } catch {}
   };
 
@@ -791,10 +832,29 @@ export default function ComposePanel() {
     setLaneMeta((prev) => prev.map((m, idx) => (idx === i ? { ...m, name } : m)));
   const updateLaneColor = (i, color) =>
     setLaneMeta((prev) => prev.map((m, idx) => (idx === i ? { ...m, color } : m)));
-  const toggleMute = (i) =>
-    setLaneMeta((prev) => prev.map((m, idx) => (idx === i ? { ...m, mute: !m.mute } : m)));
-  const toggleSolo = (i) =>
-    setLaneMeta((prev) => prev.map((m, idx) => (idx === i ? { ...m, solo: !m.solo } : m)));
+  
+  // FIXED: Proper mute toggle functionality with visual feedback
+  const toggleMute = (i) => {
+    setLaneMeta((prev) => {
+      const newMeta = prev.map((m, idx) => 
+        idx === i ? { ...m, mute: !m.mute } : m
+      );
+      return newMeta;
+    });
+  };
+
+  // FIXED: Proper solo toggle functionality  
+  const toggleSolo = (i) => {
+    setLaneMeta((prev) => {
+      // If we're soloing this lane, unsolo all others
+      const newMeta = prev.map((m, idx) => 
+        idx === i 
+          ? { ...m, solo: !m.solo } 
+          : { ...m, solo: false }
+      );
+      return newMeta;
+    });
+  };
 
   // ---- drag & drop (move/resize/copy) ----
   const startDrag = (mode, startEvent, baseClips, clone) => {
@@ -1040,7 +1100,7 @@ export default function ComposePanel() {
   };
   // ===== END Import =====
 
-  // ===== Project persistence & sharing =====
+  // ===== Project persistence =====
   const buildCompositionObject = () => ({
     clips: clips
       .map((c) => {
@@ -1156,7 +1216,6 @@ export default function ComposePanel() {
 
       // Advance lineage so the next Save keeps incrementing the edit index
       setTrackId(created.id);
-      setIsPosted(!!created.is_posted);
       lineageRef.current = {
         root: root ?? created.root ?? created.id,
         stem: created.id,
@@ -1177,42 +1236,7 @@ export default function ComposePanel() {
       setSaving(false);
     }
   };
-
-  const postProject = async () => {
-    setPosting(true);
-    try {
-      // ensure we have a node id to post
-      let idToPost = trackId;
-      if (!idToPost) {
-        await saveProject(); // sets lineageRef + trackId
-        idToPost = lineageRef.current?.stem || idToPost || trackId;
-      }
-      if (!idToPost) throw new Error('Track not created');
-
-      // Try both bases
-      let ok = false, lastErr = null, postedRes = null;
-      for (const base of TRACK_BASES) {
-        try {
-          const { data } = await API.post(`${base}${idToPost}/post/`);
-          postedRes = data;
-          ok = true;
-          break;
-        } catch (e) { lastErr = e; }
-      }
-      if (!ok) throw lastErr || new Error('Post failed');
-
-      setIsPosted(true);
-
-      const v = postedRes?.version;
-      alert(`Project posted successfully${v != null ? ` as v${v}` : ''}.`);
-    } catch (e) {
-      console.error('Post failed:', e);
-      alert('Post failed.');
-    } finally {
-      setPosting(false);
-    }
-  };
-  // ===== END Project persistence & sharing =====
+  // ===== END Project persistence =====
 
   // ===== Hydrate from server when editing an existing track (eager enrichment) =====
   useEffect(() => {
@@ -1221,7 +1245,6 @@ export default function ComposePanel() {
       try {
         const data = await fetchTrackById(trackId);
         console.log('[edit] GET track', data);
-        setIsPosted(!!data.is_posted);
 
         // 1) Rows from composition.clips
         const rows = Array.isArray(data?.composition?.clips) ? data.composition.clips : [];
@@ -1288,7 +1311,7 @@ export default function ComposePanel() {
   }, [trackId]);
   // ===== End hydrate =====
 
-  // ===== NEW: auto-enrich whenever clips contain patches missing names/params (so names show BEFORE play) =====
+  // ===== auto-enrich whenever clips contain patches missing names/params =====
   const enrichingRef = useRef(new Set());
   useEffect(() => {
     const ids = Array.from(
@@ -1390,19 +1413,31 @@ export default function ComposePanel() {
         </label>
 
         <label>BPM:&nbsp;
-          <input type="number" value={bpm}
-                 onChange={(e)=>setBpm(Math.max(1, parseInt(e.target.value||'120',10)))}
-                 style={{ width: 80 }} />
+          <input
+            type="number"
+            value={bpm}
+            onChange={(e)=>setBpm(Math.max(1, parseInt(e.target.value || '120', 10)))}
+            style={{ width: 80 }}
+          />
         </label>
         <label>Length (beats):&nbsp;
-          <input type="number" value={lengthBeats}
-                 onChange={(e)=>setLengthBeats(Math.max(1, parseInt(e.target.value||'1',10)))}
-                 style={{ width: 110 }} />
+          <input
+            type="number"
+            value={lengthBeats}
+            onChange={(e)=>setLengthBeats(Math.max(1, parseInt(e.target.value || '1', 10)))}
+            style={{ width: 110 }}
+          />
         </label>
         <label>Zoom (px/beat):&nbsp;
-          <input type="range" min="30" max="200" step="2" value={pxPerBeat}
-                 onChange={(e)=>setPxPerBeat(parseInt(e.target.value,10))}
-                 style={{ width: 220 }} />
+          <input
+            type="range"
+            min="30"
+            max="200"
+            step="2"
+            value={pxPerBeat}
+            onChange={(e)=>setPxPerBeat(parseInt(e.target.value, 10))}
+            style={{ width: 220 }}
+          />
           &nbsp;<span style={{ fontVariantNumeric: 'tabular-nums' }}>{pxPerBeat}</span>
         </label>
 
@@ -1461,7 +1496,7 @@ export default function ComposePanel() {
           {fetchError ? <span style={{ color: 'crimson' }}>{fetchError}</span> : null}
         </div>
 
-        {/* NEW: Start New Project */}
+        {/* Start New Project */}
         <button
           onClick={startNewProject}
           className={BTN.neutral}
@@ -1470,7 +1505,7 @@ export default function ComposePanel() {
           New Project
         </button>
 
-        {/* Project save controls — buttons match SynthInterface */}
+        {/* Project save controls */}
         <div className="ml-auto inline-flex items-center gap-2">
           <label htmlFor="projectName" className="font-semibold mr-1">Project:</label>
           <input
@@ -1495,16 +1530,7 @@ export default function ComposePanel() {
             title="Save to your profile"
             className={`${BTN.save} ${saving ? BTN.disabled : ''}`}
           >
-            {saving ? 'Saving…' : 'Save Project'}
-          </button>
-
-          <button
-            onClick={postProject}
-            disabled={posting}
-            title="Post to your profile so others can see it"
-            className={`${BTN.post} ${posting ? BTN.disabled : ''}`}
-          >
-            {posting ? 'Posting…' : (isPosted ? 'Re-post Project' : 'Post Project')}
+            {saving ? 'Saving...' : 'Save Project'}
           </button>
         </div>
       </div>
@@ -1516,7 +1542,7 @@ export default function ComposePanel() {
           id="projectDesc"
           value={projectDesc}
           onChange={(e) => setProjectDesc(e.target.value)}
-          placeholder="Describe your track…"
+          placeholder="Describe your track..."
           rows={3}
           className="w-full border rounded px-2 py-2"
           style={{ resize: 'vertical', minHeight: 72 }}
@@ -1615,6 +1641,9 @@ export default function ComposePanel() {
                   columnGap: 8,
                   borderBottom: '1px solid #eee',
                   paddingRight: 6,
+                  // FIXED: Visual feedback for muted lanes
+                  opacity: meta.mute ? 0.6 : 1,
+                  background: meta.mute ? '#f5f5f5' : 'transparent',
                 }}
               >
                 <input
@@ -1630,26 +1659,30 @@ export default function ComposePanel() {
                   title="Lane name"
                   style={{ width: '100%', border: '1px solid #ddd', borderRadius: 6, padding: '4px 6px' }}
                 />
+                {/* FIXED: Mute button with proper toggle and visual feedback */}
                 <button
                   onClick={() => toggleMute(i)}
-                  title="Mute"
+                  title={meta.mute ? "Unmute lane" : "Mute lane"}
                   style={{
                     padding: '2px 6px',
                     borderRadius: 6,
                     border: '1px solid #ccc',
                     background: meta.mute ? '#ffebee' : '#fff',
                     color: meta.mute ? '#d32f2f' : '#333',
+                    fontWeight: meta.mute ? 'bold' : 'normal',
                   }}
                 >M</button>
+                {/* FIXED: Solo button with proper toggle and visual feedback */}
                 <button
                   onClick={() => toggleSolo(i)}
-                  title="Solo"
+                  title={meta.solo ? "Unsolo lane" : "Solo lane"}
                   style={{
                     padding: '2px 6px',
                     borderRadius: 6,
                     border: '1px solid #ccc',
                     background: meta.solo ? '#e8f5e9' : '#fff',
                     color: meta.solo ? '#2e7d32' : '#333',
+                    fontWeight: meta.solo ? 'bold' : 'normal',
                   }}
                 >S</button>
               </div>
@@ -1657,7 +1690,7 @@ export default function ComposePanel() {
           })}
         </div>
 
-        /* Grid background */
+        {/* Grid background */}
         <div
           style={{
             position: 'absolute',
@@ -1679,7 +1712,6 @@ export default function ComposePanel() {
           }}
         />
 
-
         {/* Loop overlay */}
         {loopEnabled && loopRegion && loopRegion.endSec > loopRegion.startSec && (
           <div
@@ -1699,7 +1731,7 @@ export default function ComposePanel() {
           />
         )}
 
-        {/* Patches (tiles) */}
+        {/* Patches (tiles) - FIXED: Visual feedback for muted lanes */}
         <div style={{ position: 'absolute', left: LANE_GUTTER, top: 0, height: '100%', width: totalWidthPx }}>
           {clips.map((c) => {
             const left = c.startBeat * pxPerBeat;
@@ -1728,19 +1760,21 @@ export default function ComposePanel() {
                   else onClipMouseDown(e, c, null);
                 }}
                 onClick={(e) => { e.stopPropagation(); }}
-                title={`Patch: ${labelText} @ ${fmtTime(c.startBeat * secPerBeat)} • ${meta.name}`}
+                title={`Patch: ${labelText} @ ${fmtTime(c.startBeat * secPerBeat)} • ${meta.name}${meta.mute ? ' (MUTED)' : ''}${meta.solo ? ' (SOLO)' : ''}`}
                 style={{
                   position: 'absolute',
                   left,
                   top,
                   width,
                   height: LANE_HEIGHT - 12,
-                  background: laneColor + '33',
-                  border: `2px solid ${sel ? '#ff5a5a' : laneColor}`,
+                  background: meta.mute ? laneColor + '11' : laneColor + '33',
+                  border: `2px solid ${sel ? '#ff5a5a' : (meta.mute ? laneColor + '66' : laneColor)}`,
                   borderRadius: 6,
                   boxSizing: 'border-box',
                   overflow: 'hidden',
                   cursor: pickingLoop ? 'crosshair' : 'grab',
+                  // FIXED: Visual feedback for muted lanes
+                  opacity: meta.mute ? 0.4 : 1,
                 }}
               >
                 {/* resize handles */}
@@ -1756,8 +1790,18 @@ export default function ComposePanel() {
                     cursor: 'ew-resize', background: sel ? '#00000012' : 'transparent',
                   }}
                 />
-                <div style={{ padding: '4px 8px', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ 
+                  padding: '4px 8px', 
+                  fontSize: 12, 
+                  whiteSpace: 'nowrap', 
+                  overflow: 'hidden', 
+                  textOverflow: 'ellipsis',
+                  // FIXED: Visual feedback for muted lanes
+                  opacity: meta.mute ? 0.7 : 1,
+                }}>
                   {labelText}
+                  {meta.mute && ' 🔇'}
+                  {meta.solo && ' 🎵'}
                 </div>
               </div>
             );
@@ -1778,55 +1822,111 @@ export default function ComposePanel() {
           }}
         />
 
-        {/* Box select overlay */}
-        {box?.active && (
-          <div
-            style={{
-              position: 'absolute',
-              left: Math.min(box.x1, box.x2) - gridLeft + gridScrollLeft,
-              top: Math.min(box.y1, box.y2) - gridTop,
-              width: Math.abs(box.x2 - box.x1),
-              height: Math.abs(box.y2 - box.y1),
-              border: '1px dashed #2a63d4',
-              background: '#2a63d433',
-              pointerEvents: 'none',
-            }}
-          />
-        )}
+      {/* Box select overlay */}
+      {box?.active && (
+        <div
+          style={{
+            position: 'absolute',
+            left: Math.min(box.x1, box.x2) - gridLeft + gridScrollLeft,
+            top: Math.min(box.y1, box.y2) - gridTop,
+            width: Math.abs(box.x2 - box.x1),
+            height: Math.abs(box.y2 - box.y1),
+            border: '1px dashed #2a63d4',
+            background: '#2a63d433',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
       </div>
 
       {/* Import mapping modal */}
       {showImportMap && (
-        <div style={{
-          position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', display:'flex',
-          alignItems:'center', justifyContent:'center', zIndex: 50
-        }}>
-          <div style={{ background:'#fff', padding:16, borderRadius:8, width:620, maxHeight:'80vh', overflow:'auto' }}>
-            <h3 style={{ marginTop:0 }}>Import from Channel Rack</h3>
-            <p>Select the target lane for each rack channel:</p>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 160px', gap:8 }}>
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+          }}
+        >
+          <div
+            style={{
+              background: '#111827',           // dark surface
+              color: '#f9fafb',                // light text
+              padding: 16,
+              borderRadius: 8,
+              width: 620,
+              maxHeight: '80vh',
+              overflow: 'auto',
+              boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
+              border: '1px solid rgba(255,255,255,0.08)',
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Import from Channel Rack</h3>
+            <p style={{ marginBottom: 12 }}>
+              Select the target lane for each rack channel:
+            </p>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 160px',
+                gap: 8,
+              }}
+            >
               {channels.map((ch, idx) => (
                 <React.Fragment key={idx}>
-                  <div style={{ padding:'6px 0' }}>
-                    <strong>Rack {idx + 1}</strong> — {ch?.patch?.displayName || ch?.patch?.name || '(empty)'}
+                  <div style={{ padding: '6px 0' }}>
+                    <strong>Rack {idx + 1}</strong> —{' '}
+                    {ch?.patch?.displayName || ch?.patch?.name || '(empty)'}
                   </div>
                   <select
                     value={importMap[idx] ?? Math.min(idx, Math.max(lanes - 1, 0))}
-                    onChange={(e)=>setImportMap(m => ({ ...m, [idx]: parseInt(e.target.value,10) }))}
+                    onChange={(e) =>
+                      setImportMap((m) => ({
+                        ...m,
+                        [idx]: parseInt(e.target.value, 10),
+                      }))
+                    }
+                    style={{
+                      backgroundColor: '#111827',
+                      color: '#f9fafb',
+                      border: '1px solid #4b5563',
+                      borderRadius: 6,
+                      padding: '4px 6px',
+                    }}
                   >
-                    {Array.from({ length: Math.max(lanes, channels.length) }).map((_, laneIdx) => (
-                      <option key={laneIdx} value={laneIdx}>
-                        {laneMeta[laneIdx]?.name || `Lane ${laneIdx + 1}`}
-                      </option>
-                    ))}
+                    {Array.from({ length: Math.max(lanes, channels.length) }).map(
+                      (_, laneIdx) => (
+                        <option key={laneIdx} value={laneIdx}>
+                          {laneMeta[laneIdx]?.name || `Lane ${laneIdx + 1}`}
+                        </option>
+                      ),
+                    )}
                   </select>
                 </React.Fragment>
               ))}
             </div>
 
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:12 }}>
-              <button onClick={()=>setShowImportMap(false)} className={BTN.neutral}>Cancel</button>
-              <button onClick={doImportMapped} className={BTN.neutral}>Import</button>
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                justifyContent: 'flex-end',
+                marginTop: 12,
+              }}
+            >
+              <button
+                onClick={() => setShowImportMap(false)}
+                className={BTN.neutral}
+              >
+                Cancel
+              </button>
+              <button onClick={doImportMapped} className={BTN.neutral}>
+                Import
+              </button>
             </div>
           </div>
         </div>

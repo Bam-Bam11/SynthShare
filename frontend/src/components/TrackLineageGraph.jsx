@@ -150,106 +150,118 @@ export default function TrackLineageGraph({ trackId }) {
   };
 
   return (
-    <svg
-      ref={svgRef}
-      width="100%"
-      height="700"
-      style={{ border: '1px solid #ccc', cursor: dragging.current ? 'grabbing' : 'grab' }}
-      onWheel={handleWheel}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-    >
-      <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}>
+    <div className="lineage-graph">
+      <svg
+        ref={svgRef}
+        width="100%"
+        height="700"
+        style={{
+          border: '1px solid var(--panel-border)',
+          cursor: dragging.current ? 'grabbing' : 'grab',
+          background: 'transparent'
+        }}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        aria-label="Track lineage graph"
+      >
+        <g transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}>
 
-        {/* Edges */}
-        {(edges || []).map((edge, i) => {
-          const from = nodeById.get(edge.from);
-          const to = nodeById.get(edge.to);
-          if (!from || !to) return null;
+          {/* Edges (colour comes from CSS tokens) */}
+          {(edges || []).map((edge, i) => {
+            const from = nodeById.get(edge.from);
+            const to = nodeById.get(edge.to);
+            if (!from || !to) return null;
 
-          const stackedRank = to.sibling_rank || 1;
-          const mustCurve = stackedRank > 1 || edgeWouldHitNode(from, to);
+            const stackedRank = to.sibling_rank || 1;
+            const mustCurve = stackedRank > 1 || edgeWouldHitNode(from, to);
 
-          if (mustCurve) {
-            const d = curvedPath(from.x, from.y, to.x, to.y, stackedRank);
-            return <path key={i} d={d} stroke="gray" strokeWidth="2" fill="none" />;
-          }
+            if (mustCurve) {
+              const d = curvedPath(from.x, from.y, to.x, to.y, stackedRank);
+              return <path key={i} className="edge" d={d} strokeWidth="2" fill="none" />;
+            }
 
-          return <line key={i} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="gray" strokeWidth="2" />;
-        })}
+            return <line key={i} className="edge" x1={from.x} y1={from.y} x2={to.x} y2={to.y} strokeWidth="2" />;
+          })}
 
-        {/* Nodes */}
-        {displayNodes.map((n) => {
-          const r = nodeVisualRadius(n);
-          const linkAllowed = linkable.has(n.id);
-          const unavailable = !linkAllowed;
-          const fill = n.isCurrent ? '#3b82f6' : (unavailable ? '#f2f2f2' : '#d3d3d3');
-          const stroke = unavailable ? '#888' : '#000';
-          const dash = unavailable ? '6 4' : '0';
-          const label = `v${n.version ?? '?.?'}`;
+          {/* Nodes */}
+          {displayNodes.map((n) => {
+            const r = nodeVisualRadius(n);
+            const linkAllowed = linkable.has(n.id);
+            const unavailable = !linkAllowed;
 
-          return (
-            <g key={n.id}>
-              <circle
-                cx={n.x}
-                cy={n.y}
-                r={r}
-                fill={fill}
-                stroke={stroke}
-                strokeDasharray={dash}
-                strokeWidth="1"
-                onMouseEnter={() => setHovered(n)}
-                onMouseLeave={() => setHovered(null)}
-              />
-              {linkAllowed ? (
-                <a href={`/tracks/${n.id}`}>
+            // Colours driven by tokens; only the "current" state gets an accent fill.
+            const fill = n.isCurrent ? 'var(--btn-primary-bg)' : 'var(--graph-node-bg)';
+            const stroke = 'var(--graph-node-stroke)';
+            const dash = unavailable ? '6 4' : undefined;
+            const label = `v${n.version ?? '?.?'}`;
+
+            return (
+              <g key={n.id}>
+                <circle
+                  cx={n.x}
+                  cy={n.y}
+                  r={r}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeDasharray={dash}
+                  strokeWidth="1"
+                  onMouseEnter={() => setHovered(n)}
+                  onMouseLeave={() => setHovered(null)}
+                />
+                {linkAllowed ? (
+                  <a href={`/tracks/${n.id}`} style={{ pointerEvents: 'auto' }}>
+                    <text
+                      x={n.x}
+                      y={n.y - r - 6}
+                      textAnchor="middle"
+                      fontSize="11"
+                      className="version"
+                    >
+                      {label}
+                    </text>
+                  </a>
+                ) : (
                   <text
                     x={n.x}
                     y={n.y - r - 6}
                     textAnchor="middle"
-                    fontSize="10"
-                    fill="black"
-                    style={{ pointerEvents: 'auto' }}
+                    fontSize="11"
+                    className="version"
                   >
                     {label}
                   </text>
-                </a>
-              ) : (
-                <text
-                  x={n.x}
-                  y={n.y - r - 6}
-                  textAnchor="middle"
-                  fontSize="10"
-                  fill="#444"
-                >
-                  {label}
-                </text>
-              )}
-            </g>
-          );
-        })}
+                )}
+              </g>
+            );
+          })}
 
-        {/* Tooltip */}
-        {hovered && (
-          <foreignObject x={hovered.x + 10} y={hovered.y - 30} width="220" height="70">
-            <div style={{
-              background: 'white',
-              border: '1px solid black',
-              padding: '4px',
-              borderRadius: '4px',
-              fontSize: '10px',
-              pointerEvents: 'none'
-            }}>
-              <strong>{hovered.name || 'Track'}</strong><br />
-              {`v${hovered.version ?? '?.?'}`}<br />
-              {hovered.uploaded_by ? <em>by {hovered.uploaded_by}</em> : <em>unavailable</em>}
-            </div>
-          </foreignObject>
-        )}
+          {/* Tooltip (uses panel tokens so it flips nicely in dark mode) */}
+          {hovered && (
+            <foreignObject x={hovered.x + 10} y={hovered.y - 30} width="220" height="70">
+              <div
+                style={{
+                  background: 'var(--panel-bg)',
+                  color: 'var(--panel-fg)',
+                  border: '1px solid var(--panel-border)',
+                  padding: '4px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  boxShadow: 'var(--panel-elevation)',
+                  pointerEvents: 'none'
+                }}
+              >
+                <strong>{hovered.name || 'Track'}</strong><br />
+                {`v${hovered.version ?? '?.?'}`}<br />
+                {hovered.uploaded_by ? <em>by {hovered.uploaded_by}</em> : <em>unavailable</em>}
+              </div>
+            </foreignObject>
+          )}
 
-      </g>
-    </svg>
+        </g>
+      </svg>
+    </div>
   );
 }

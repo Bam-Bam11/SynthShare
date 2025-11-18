@@ -17,8 +17,12 @@ function approxEqual(a, b, eps = EPS.default) {
   return Math.abs((a ?? 0) - (b ?? 0)) <= eps;
 }
 
+// ---------- Utils ----------
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
+const isNumber = (v) => typeof v === 'number';
+
 // ---- Flatteners ----
-function flattenParams(params) {
+function flattenParams(params = {}) {
   const flat = { ...params };
 
   if (params.envelope) {
@@ -35,15 +39,15 @@ function flattenParams(params) {
     delete flat.filter;
   }
 
-  // Expose up to two oscillators' numeric fields so the numeric loop can include them
+  // Expose up to two oscillators' numeric fields (we may skip them in scoring to avoid double-counting)
   if (Array.isArray(params.oscillators) && params.oscillators.length) {
     const oscs = params.oscillators.slice(0, 2);
     oscs.forEach((o, i) => {
       const idx = i + 1;
-      if (typeof o?.gain === 'number') flat[`osc${idx}_gain`] = o.gain;
-      if (typeof o?.detune === 'number') flat[`osc${idx}_detune`] = o.detune;
-      if (typeof o?.frequency === 'number') flat[`osc${idx}_frequency`] = o.frequency;
-      if (typeof o?.slideFrom === 'number') flat[`osc${idx}_slideFrom`] = o.slideFrom;
+      if (isNumber(o?.gain))       flat[`osc${idx}_gain`] = o.gain;
+      if (isNumber(o?.detune))     flat[`osc${idx}_detune`] = o.detune;
+      if (isNumber(o?.frequency))  flat[`osc${idx}_frequency`] = o.frequency;
+      if (isNumber(o?.slideFrom))  flat[`osc${idx}_slideFrom`] = o.slideFrom;
       // type remains categorical, handled in oscillator section
     });
   }
@@ -76,7 +80,7 @@ function noteSimilarity(a, b) {
   return 0;
 }
 
-// ---- Duration similarity (unchanged) ----
+// ---- Duration similarity ----
 function durationSimilarity(a, b) {
   const values = {
     '1n': 1.0,
@@ -100,7 +104,7 @@ function durationSimilarity(a, b) {
   return 0;
 }
 
-// ---- Filter type similarity (unchanged logic) ----
+// ---- Filter type similarity ----
 function filterTypeSimilarity(current, target) {
   const c = current.filter;
   const t = target.filter;
@@ -126,26 +130,24 @@ function filterTypeSimilarity(current, target) {
 }
 
 // ---------- Oscillator-aware similarity helpers ----------
-const clamp01 = (x) => Math.max(0, Math.min(1, x));
-
 function asOscArray(p = {}) {
   // Preferred multi-osc shape
   if (Array.isArray(p.oscillators) && p.oscillators.length) {
     return p.oscillators.slice(0, 2).map(o => ({
       type: o?.type ?? 'sine',
-      gain: typeof o?.gain === 'number' ? o.gain : 1,
-      detune: typeof o?.detune === 'number' ? o.detune : 0,               // cents
-      frequency: (typeof o?.frequency === 'number') ? o.frequency : null, // null = follow note
-      slideFrom: (typeof o?.slideFrom === 'number') ? o.slideFrom : null,
+      gain: isNumber(o?.gain) ? o.gain : 1,
+      detune: isNumber(o?.detune) ? o.detune : 0,               // cents
+      frequency: isNumber(o?.frequency) ? o.frequency : null,   // null = follow note
+      slideFrom: isNumber(o?.slideFrom) ? o.slideFrom : null,
     }));
   }
   // Legacy single-osc payload
   const legacy = {
     type: p.oscillator || 'sine',
-    gain: typeof p?.gain === 'number' ? p.gain : 1,
-    detune: typeof p?.detune === 'number' ? p.detune : 0,
-    frequency: typeof p?.frequency === 'number' ? p.frequency : null,
-    slideFrom: typeof p?.slideFrom === 'number' ? p.slideFrom : null,
+    gain: isNumber(p?.gain) ? p.gain : 1,
+    detune: isNumber(p?.detune) ? p.detune : 0,
+    frequency: isNumber(p?.frequency) ? p.frequency : null,
+    slideFrom: isNumber(p?.slideFrom) ? p.slideFrom : null,
   };
   return [legacy];
 }
@@ -174,7 +176,10 @@ function freqSim(aHz, bHz) {
   return Math.exp(-(cents * cents) / (2 * 35 * 35));
 }
 
-function slideFromSim(aHz, bHz) {
+// Portamento-aware slideFrom similarity:
+// If both portamentos are effectively zero, glide never triggers, so treat slideFrom as perfect.
+function slideFromSim(aHz, bHz, portaA = 0, portaB = 0) {
+  if ((portaA ?? 0) <= 0 && (portaB ?? 0) <= 0) return 1;
   if (aHz == null && bHz == null) return 1;
   if (aHz == null || bHz == null) return 0.6;
   if (approxEqual(aHz, bHz, EPS.slideFrom)) return 1;
@@ -182,14 +187,14 @@ function slideFromSim(aHz, bHz) {
   return clamp01(1 - Math.abs(aHz - bHz) / base);
 }
 
-function oscPairSim(oscA = {}, oscB = {}) {
+function oscPairSim(oscA = {}, oscB = {}, portaA = 0, portaB = 0) {
   const w = { type: 0.2, freq: 0.25, detune: 0.2, gain: 0.25, slideFrom: 0.1 };
   return (
     w.type      * typeSim(oscA.type,       oscB.type) +
     w.freq      * freqSim(oscA.frequency,  oscB.frequency) +
     w.detune    * detuneSim(oscA.detune,   oscB.detune) +
     w.gain      * gainSim(oscA.gain,       oscB.gain) +
-    w.slideFrom * slideFromSim(oscA.slideFrom, oscB.slideFrom)
+    w.slideFrom * slideFromSim(oscA.slideFrom, oscB.slideFrom, portaA, portaB)
   );
 }
 
@@ -200,12 +205,14 @@ function oscPairSim(oscA = {}, oscB = {}) {
  * Returns 0..1
  */
 function oscillatorsSimilarity(current, target) {
+  const portaA = current?.portamento ?? 0;
+  const portaB = target?.portamento ?? 0;
   const A = asOscArray(current);
   const B = asOscArray(target);
 
   // Single↔single fast path
   if (A.length === 1 && B.length === 1) {
-    return oscPairSim(A[0], B[0]);
+    return oscPairSim(A[0], B[0], portaA, portaB);
   }
 
   const candidates = [
@@ -214,7 +221,9 @@ function oscillatorsSimilarity(current, target) {
   ];
 
   candidates.forEach(c => {
-    c.score = c.pairing.reduce((acc, [i, j]) => (A[i] && B[j] ? acc + oscPairSim(A[i], B[j]) : acc), 0);
+    c.score = c.pairing.reduce((acc, [i, j]) => (
+      A[i] && B[j] ? acc + oscPairSim(A[i], B[j], portaA, portaB) : acc
+    ), 0);
   });
 
   let best = candidates[0].score >= candidates[1].score ? candidates[0] : candidates[1];
@@ -263,18 +272,33 @@ const MAX_RANGES = {
 // ---- Public API ----
 export function calculateSimilarityScore(current, target) {
   const flatCurrent = flattenParams(current);
-  const flatTarget = flattenParams(target);
+  const flatTarget  = flattenParams(target);
+
+  const portaBothZero =
+    ((current?.portamento ?? flatCurrent.portamento ?? 0) <= 0) &&
+    ((target?.portamento ?? flatTarget.portamento ?? 0) <= 0);
+
+  // Skip keys that would double-count oscillator attributes (including legacy top-level fields)
+  const skipOscNumeric = (k) =>
+    /^osc[12]_(gain|detune|frequency|slideFrom)$/.test(k) ||
+    k === 'detune' || k === 'gain' || k === 'frequency' || k === 'slideFrom';
+
+  // Also skip slideFrom if both portamentos are effectively zero (inaudible)
+  const skipIfInaudibleGlide = (k) => portaBothZero && /^osc[12]_slideFrom$/.test(k);
 
   const numericKeys = Object.keys(flatTarget).filter(
-    key => typeof flatTarget[key] === 'number' && typeof flatCurrent[key] === 'number'
+    (key) =>
+      isNumber(flatTarget[key]) &&
+      isNumber(flatCurrent[key]) &&
+      !skipOscNumeric(key) &&
+      !skipIfInaudibleGlide(key) &&
+      !(key === 'portamento' && portaBothZero)
   );
-
-  if (numericKeys.length === 0) return 0;
 
   let totalSimilarity = 0;
   let totalWeight = 0;
 
-  // Oscillators section (keeps your 2x weight)
+  // Oscillators section (2x)
   const oscSection = oscillatorsSimilarity(current, target); // 0..1
   totalSimilarity += oscSection * 2;
   totalWeight += 2;
@@ -317,24 +341,25 @@ export function calculateSimilarityScore(current, target) {
     else if (key === 'filter_bandLow' || key === 'filter_bandHigh') e = EPS.band;
     else if (key === 'filter_resonance') e = EPS.resonance;
 
-    let similarity;
-    if (approxEqual(a, b, e)) {
-      similarity = 1;
-    } else {
-      const diff = Math.abs(a - b);
-      similarity = Math.max(0, 1 - (diff / maxRange));
-    }
+    const similarity = approxEqual(a, b, e)
+      ? 1
+      : Math.max(0, 1 - (Math.abs(a - b) / maxRange));
+
     totalSimilarity += similarity;
     totalWeight += 1;
   }
 
-  const averageSimilarity = totalSimilarity / totalWeight;
+  const averageSimilarity = totalWeight > 0 ? (totalSimilarity / totalWeight) : 0;
   return averageSimilarity * 100;
 }
 
 export function getSimilarityBreakdown(current, target, { debug = false } = {}) {
   const flatCurrent = flattenParams(current);
-  const flatTarget = flattenParams(target);
+  const flatTarget  = flattenParams(target);
+
+  const portaBothZero =
+    ((current?.portamento ?? flatCurrent.portamento ?? 0) <= 0) &&
+    ((target?.portamento ?? flatTarget.portamento ?? 0) <= 0);
 
   const result = {};
 
@@ -346,9 +371,19 @@ export function getSimilarityBreakdown(current, target, { debug = false } = {}) 
   result.note = noteSimilarity(current.note, target.note);
   result.duration = durationSimilarity(current.duration, target.duration);
 
-  // Numeric fields (epsilon-aware)
+  // Numeric fields (epsilon-aware), skipping oscillator-double-counts and inaudible glide
+  const skipOscNumeric = (k) =>
+    /^osc[12]_(gain|detune|frequency|slideFrom)$/.test(k) ||
+    k === 'detune' || k === 'gain' || k === 'frequency' || k === 'slideFrom';
+  const skipIfInaudibleGlide = (k) => portaBothZero && /^osc[12]_slideFrom$/.test(k);
+
   const numericKeys = Object.keys(flatTarget).filter(
-    key => typeof flatTarget[key] === 'number' && typeof flatCurrent[key] === 'number'
+    (key) =>
+      isNumber(flatTarget[key]) &&
+      isNumber(flatCurrent[key]) &&
+      !skipOscNumeric(key) &&
+      !skipIfInaudibleGlide(key) &&
+      !(key === 'portamento' && portaBothZero)
   );
 
   for (let key of numericKeys) {
@@ -368,16 +403,12 @@ export function getSimilarityBreakdown(current, target, { debug = false } = {}) 
     else if (key === 'filter_bandLow' || key === 'filter_bandHigh') e = EPS.band;
     else if (key === 'filter_resonance') e = EPS.resonance;
 
-    if (approxEqual(a, b, e)) {
-      result[key] = 1;
-    } else {
-      const diff = Math.abs(a - b);
-      result[key] = Math.max(0, 1 - (diff / maxRange));
-    }
+    result[key] = approxEqual(a, b, e)
+      ? 1
+      : Math.max(0, 1 - (Math.abs(a - b) / maxRange));
   }
 
   if (debug) {
-    // Log once, without recursion or undefined identifiers
     // eslint-disable-next-line no-console
     console.log('breakdown', result);
   }
