@@ -46,11 +46,39 @@ const TrackDetail = () => {
         ? Number(maybeId)
         : (maybeId?.id ?? null);
     if (!idNum) return null;
+    
     const cache = patchCacheRef.current;
-    if (cache.has(idNum)) return cache.get(idNum);
-    const { data } = await API.get(`/patches/${idNum}/`);
-    cache.set(idNum, data);
-    return data;
+    
+    // Only return cached data if it's not a deleted placeholder
+    if (cache.has(idNum)) {
+      const cached = cache.get(idNum);
+      // If we have actual patch data (not a deleted placeholder), return it
+      if (cached && !cached.is_deleted) {
+        return cached;
+      }
+      // If it's a deleted placeholder, we'll try to refetch to be sure
+    }
+    
+    try {
+      const { data } = await API.get(`/patches/${idNum}/`);
+      cache.set(idNum, data);
+      return data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        console.warn(`Patch ${idNum} not found (deleted)`);
+        // Cache the fact that this patch doesn't exist to avoid repeated requests
+        const deletedPatch = { 
+          id: idNum, 
+          is_deleted: true,
+          name: 'Deleted Patch',
+          parameters: null
+        };
+        cache.set(idNum, deletedPatch);
+        return deletedPatch;
+      }
+      console.error(`Error fetching patch ${idNum}:`, error);
+      throw error;
+    }
   };
 
   useEffect(() => {
@@ -69,7 +97,9 @@ const TrackDetail = () => {
       setError(null);
       try {
         const { data } = await API.get(`/tracks/${id}/`);
-        if (!cancelled) setTrack(data);
+        if (!cancelled) {
+          setTrack(data);
+        }
       } catch (e) {
         if (cancelled) return;
         const msg =
@@ -171,6 +201,63 @@ const TrackDetail = () => {
     }
   };
 
+  // ===== UPDATED: Fork/Edit handler =====
+  const handleEditOrFork = async () => {
+    if (!track) return;
+
+    const isEdit = isOwner;
+
+    // Fetch all patches used in the track composition
+    const patchIds = Array.from(new Set(composition.map(row => row.patchId).filter(Boolean)));
+
+    const patches = [];
+    
+    for (const patchId of patchIds) {
+      try {
+        const patch = await resolvePatchById(patchId);
+        if (patch) {
+          patches.push(patch);
+        }
+      } catch (error) {
+        console.error(`Failed to fetch patch ${patchId}:`, error);
+      }
+    }
+
+    // Create a mapping of patchId to patch data for the composer
+    const patchesMap = {};
+    patches.forEach(patch => {
+      if (patch && patch.id) {
+        patchesMap[patch.id] = patch;
+      }
+    });
+
+    const trackData = {
+      action: isEdit ? 'edit' : 'fork',
+      id: track.id,
+      stem: track.id,
+      immediate_predecessor: track.id,
+      root: track.root || track.id,
+      name: track.name + (isEdit ? '' : ' (fork)'),
+      description: track.description || '',
+      bpm: track.bpm,
+      composition: track.composition, // Keep the original composition structure
+      // Include the patches data and normalized composition for channel hydration
+      patches: patchesMap,
+      normalizedComposition: composition
+    };
+    
+    // Clear any existing track data first
+    localStorage.removeItem('trackToLoad');
+    
+    // Store the track data
+    localStorage.setItem('trackToLoad', JSON.stringify(trackData));
+    
+    // Also set the active tab to track
+    localStorage.setItem('buildcompose_active_tab', 'track');
+    
+    navigate('/build');
+  };
+
   // ===== Composition normalisation (handles composition.clips and legacy arrays) =====
   const composition = useMemo(() => {
     if (!track) return [];
@@ -197,10 +284,12 @@ const TrackDetail = () => {
       };
     };
 
-    return clips
+    const normalized = clips
       .map(normalise)
       .filter(c => c.patchId != null)
       .sort((a, b) => (a.startBeat - b.startBeat) || (a.lane - b.lane));
+
+    return normalized;
   }, [track]);
 
   const bpm = Number(track?.bpm) || 120;
@@ -210,6 +299,22 @@ const TrackDetail = () => {
     [composition]
   );
   const totalSeconds = beatsToSeconds(totalBeats);
+
+  // Calculate deleted patches count
+  const deletedPatchesCount = useMemo(() => {
+    if (!composition.length) return 0;
+    const patchIds = Array.from(new Set(composition.map(r => r.patchId).filter(Boolean)));
+    return patchIds.filter(pid => {
+      const cached = patchCacheRef.current.get(pid);
+      return cached?.is_deleted;
+    }).length;
+  }, [composition]);
+
+  // Calculate total unique patches
+  const totalUniquePatches = useMemo(() => {
+    if (!composition.length) return 0;
+    return Array.from(new Set(composition.map(r => r.patchId).filter(Boolean))).length;
+  }, [composition]);
 
   // ===== SoundCloud-style waveform =====
   const canvasRef = useRef(null);
@@ -371,6 +476,7 @@ const TrackDetail = () => {
     if (!composition.length || totalSeconds <= 0) return;
 
     await Tone.start();
+    
     const transport = Tone.getTransport();
     transport.stop();
     transport.cancel();
@@ -380,34 +486,62 @@ const TrackDetail = () => {
     // fetch unique patches (so every clip can play)
     const ids = Array.from(new Set(composition.map(r => r.patchId).filter(Boolean)));
     const fetched = await Promise.all(ids.map(async (pid) => {
-      try { return [pid, await resolvePatchById(pid)]; } catch { return [pid, null]; }
+      try { 
+        const patch = await resolvePatchById(pid);
+        return [pid, patch];
+      } catch (error) {
+        console.warn(`Patch ${pid} not found or deleted:`, error.response?.data || error.message);
+        return [pid, { 
+          id: pid, 
+          is_deleted: true,
+          name: 'Deleted Patch',
+          parameters: null
+        }];
+      }
     }));
+    
     const byId = new Map(fetched);
 
     // schedule each clip
     composition.forEach((row) => {
       const patch = byId.get(row.patchId);
-      if (!patch || !patch.parameters) return;
+      if (!patch || !patch.parameters || patch.is_deleted) {
+        return;
+      }
+      
       const s = beatsToSeconds(row.startBeat);
       const e = beatsToSeconds(row.endBeat);
       const dur = Math.max(0.05, e - s);
+      
       transport.schedule((time) => {
         try {
-          PlayPatch({ ...patch, note: patch.note || 'C4', duration: dur }, time);
-        } catch {}
+          PlayPatch({ 
+            ...patch, 
+            note: patch.note || 'C4', 
+            duration: dur 
+          }, time);
+        } catch (error) {
+          console.error(`Failed to play patch ${row.patchId}:`, error);
+        }
       }, s);
     });
 
     // hard stop at end
     transport.scheduleOnce(() => {
-      try { transport.stop(); transport.seconds = 0; } catch {}
+      try { 
+        transport.stop(); 
+        transport.seconds = 0; 
+      } catch {}
       setIsPlaying(false);
       setProgressSec(0);
       cancelAnimationFrame(rafRef.current);
     }, totalSeconds + 0.05);
 
-    transport.start('+0.0', Math.max(0, Math.min(totalSeconds, startAtSec)));
-    setIsPlaying(true);
+    // Small delay to ensure everything is set up
+    setTimeout(() => {
+      transport.start('+0.1', Math.max(0, Math.min(totalSeconds, startAtSec)));
+      setIsPlaying(true);
+    }, 100);
 
     cancelAnimationFrame(rafRef.current);
     const tick = () => {
@@ -517,14 +651,20 @@ const TrackDetail = () => {
       <h3 style={{ marginTop: 20 }}>Audio Profile</h3>
       <div style={{ marginBottom: 10 }}>
         <strong>BPM:</strong> {bpm} &nbsp;•&nbsp; <strong>Length:</strong> {fmtTime(totalSeconds)}
+        {deletedPatchesCount > 0 && (
+          <span style={{ color: '#d32f2f', marginLeft: 12 }}>
+            ⚠️ {deletedPatchesCount} of {totalUniquePatches} patches deleted
+          </span>
+        )}
       </div>
 
       {/* Controls use same styling as ComposePanel */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
         <button
           onClick={onPlayClick}
-          className={`${BTN.play} ${totalSeconds <= 0 ? BTN.disabled : ''}`}
-          disabled={totalSeconds <= 0}
+          className={`${BTN.play} ${(totalSeconds <= 0 || deletedPatchesCount === totalUniquePatches) ? BTN.disabled : ''}`}
+          disabled={totalSeconds <= 0 || deletedPatchesCount === totalUniquePatches}
+          title={deletedPatchesCount === totalUniquePatches ? "Cannot play - all patches have been deleted" : ""}
         >
           {isPlaying ? 'Pause' : 'Play'}
         </button>
@@ -561,32 +701,26 @@ const TrackDetail = () => {
         Tip: click the waveform to seek. Click again to start playing from that point.
       </div>
 
-      {isOwner && (
+      {/* ===== UPDATED: Action buttons with Fork/Edit logic ===== */}
+      {currentUserId && (
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          {!track.is_posted ? (
-            <button onClick={handlePost} disabled={busy}>Post</button>
+          {isOwner ? (
+            <>
+              {!track.is_posted ? (
+                <button onClick={handlePost} disabled={busy}>Post</button>
+              ) : (
+                <button onClick={handleUnpost} disabled={busy}>Unpost</button>
+              )}
+              <button onClick={handleDelete} disabled={busy}>Delete</button>
+              <button onClick={handleEditOrFork} disabled={busy}>
+                Edit Track
+              </button>
+            </>
           ) : (
-            <button onClick={handleUnpost} disabled={busy}>Unpost</button>
+            <button onClick={handleEditOrFork} disabled={busy}>
+              Fork Track
+            </button>
           )}
-          <button onClick={handleDelete} disabled={busy}>Delete</button>
-          <button onClick={() => {
-            localStorage.setItem('buildcompose_active_tab', 'track');
-            localStorage.setItem(
-              'trackToLoad',
-              JSON.stringify({
-                action: 'edit',
-                stem: track.id,
-                immediate_predecessor: track.id,
-                root: track.root || track.id,
-                name: track.name || `Track ${track.id}`,
-                bpm: track.bpm,
-                composition: Array.isArray(track.composition) ? track.composition : (track?.composition || {}),
-              })
-            );
-            navigate('/build');
-          }} disabled={busy}>
-            Edit in Composer
-          </button>
         </div>
       )}
 

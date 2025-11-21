@@ -4,6 +4,17 @@ from django.db.models import F
 from .utils import to_base32
 
 
+class SoftDeleteManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(is_deleted=False)
+    
+    def with_deleted(self):
+        return super().get_queryset()
+    
+    def deleted_only(self):
+        return super().get_queryset().filter(is_deleted=True)
+
+
 class Patch(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True, default='')
@@ -23,9 +34,13 @@ class Patch(models.Model):
     # "<fork>.<edit>" in base-32 (digits 0-9, a-v)
     version = models.CharField(max_length=20, blank=True, default='0.0')
 
-    note = models.CharField(max_length=10, default='C4')
     duration = models.CharField(max_length=10, default='8n')
     is_posted = models.BooleanField(default=False)
+    
+    # Soft delete
+    is_deleted = models.BooleanField(default=False)
+
+    objects = SoftDeleteManager()
 
     class Meta:
         ordering = ['-created_at']
@@ -123,9 +138,9 @@ class Patch(models.Model):
         self.stem_id = self.pk  # fork head anchors its lineage
         super().save(update_fields=['version', 'immediate_predecessor', 'stem'])
 
-        # increment predecessor's forks counter
+        # increment predecessor's forks counter (even if deleted)
         if source_node_id := getattr(source_node, 'pk', None):
-            Patch.objects.filter(pk=source_node_id).update(forks=F('forks') + 1)
+            Patch.objects.with_deleted().filter(pk=source_node_id).update(forks=F('forks') + 1)
 
     @transaction.atomic
     def _finalise_edit(self):
@@ -191,12 +206,12 @@ class Patch(models.Model):
         if fork_str == '0':
             return root
 
-        head = cls.objects.filter(root=root, version=f'{fork_str}.0').first()
+        head = cls.objects.with_deleted().filter(root=root, version=f'{fork_str}.0').first()
         if head:
             return head
 
         # fallback: earliest node in this fork lineage
-        head = cls.objects.filter(root=root, version__startswith=f'{fork_str}.').order_by('created_at').first()
+        head = cls.objects.with_deleted().filter(root=root, version__startswith=f'{fork_str}.').order_by('created_at').first()
         if head:
             return head
 
@@ -215,7 +230,7 @@ class Patch(models.Model):
         We look only at fork heads (edit index == '0') and decode base-32 with int(..., 32).
         """
         versions = list(
-            cls.objects.select_for_update().filter(root=root).values_list('version', flat=True)
+            cls.objects.with_deleted().select_for_update().filter(root=root).values_list('version', flat=True)
         )
         fork_indices = []
         for v in versions:
@@ -265,6 +280,11 @@ class Track(models.Model):
 
     version = models.CharField(max_length=20, blank=True, default='0.0')
     is_posted = models.BooleanField(default=False)
+    
+    # Soft delete
+    is_deleted = models.BooleanField(default=False)
+
+    objects = SoftDeleteManager()
 
     class Meta:
         ordering = ['-created_at']
@@ -357,9 +377,9 @@ class Track(models.Model):
         self.stem_id = self.pk  # fork head anchors its lineage
         super().save(update_fields=['version', 'immediate_predecessor', 'stem'])
 
-        # increment predecessor's forks counter
+        # increment predecessor's forks counter (even if deleted)
         if source_node_id := getattr(source_node, 'pk', None):
-            Track.objects.filter(pk=source_node_id).update(forks=F('forks') + 1)
+            Track.objects.with_deleted().filter(pk=source_node_id).update(forks=F('forks') + 1)
 
     @transaction.atomic
     def _finalise_edit(self):
@@ -425,11 +445,11 @@ class Track(models.Model):
         if fork_str == '0':
             return root
 
-        head = cls.objects.filter(root=root, version=f'{fork_str}.0').first()
+        head = cls.objects.with_deleted().filter(root=root, version=f'{fork_str}.0').first()
         if head:
             return head
 
-        head = cls.objects.filter(root=root, version__startswith=f'{fork_str}.').order_by('created_at').first()
+        head = cls.objects.with_deleted().filter(root=root, version__startswith=f'{fork_str}.').order_by('created_at').first()
         if head:
             return head
 
@@ -446,7 +466,7 @@ class Track(models.Model):
         We look only at fork heads (edit index == '0') and decode base-32 with int(..., 32).
         """
         versions = list(
-            cls.objects.select_for_update().filter(root=root).values_list('version', flat=True)
+            cls.objects.with_deleted().select_for_update().filter(root=root).values_list('version', flat=True)
         )
         fork_indices = []
         for v in versions:
@@ -457,5 +477,3 @@ class Track(models.Model):
             except Exception:
                 continue
         return (max(fork_indices) + 1) if fork_indices else 1  # after 0.0, first fork is 1.0
-
-

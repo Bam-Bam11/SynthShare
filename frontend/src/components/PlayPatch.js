@@ -4,13 +4,12 @@ const PlayPatch = async (patch) => {
     await Tone.start();
 
     const params = patch.parameters || {};
-    const note = patch.note || 'C4';
     const duration = patch.duration || '8n';
 
     const env = params.envelope || {};
-    const filterParams = params.filter || {};
-    const portamento = params.portamento ?? 0; // seconds (0 = no glide)
+    const portamento = params.portamento ?? 0;
     const noiseLevel = params.noiseLevel ?? -60;
+    const masterGain = params.masterGain ?? 1; // Add this line
 
     // Envelope
     const envelope = new Tone.AmplitudeEnvelope({
@@ -20,9 +19,15 @@ const PlayPatch = async (patch) => {
         release: env.release ?? 0.5,
     });
 
-    // Filter (optional)
-    let filter = null;
-    if (filterParams.type && filterParams.type !== 'none') {
+    // Add master gain
+    const master = new Tone.Gain(masterGain);
+    envelope.connect(master);
+    master.toDestination();
+
+    // Helper function to create filter
+    const createFilter = (filterParams) => {
+        if (!filterParams || filterParams.type === 'none') return null;
+        
         let frequency = 1000;
         if (filterParams.type === 'bandpass') {
             const low = filterParams.bandLow ?? 300;
@@ -31,32 +36,22 @@ const PlayPatch = async (patch) => {
         } else {
             frequency = filterParams.cutoff ?? 1000;
         }
-        filter = new Tone.Filter({
+        
+        return new Tone.Filter({
             type: filterParams.type,
             frequency,
             Q: filterParams.resonance ?? 1,
         });
-        filter.connect(envelope);
-    }
+    };
 
-    envelope.toDestination();
-
-    // Oscillators (multi-osc) with legacy fallback
-    const oscDefs = params.oscillators || [{
-        type: params.oscillator || 'sine',
-        frequency: Tone.Frequency(note).toFrequency(), // legacy target
-        gain: 1,
-        detune: params.detune ?? 0
-    }];
+    // Oscillators - only new format supported
+    const oscDefs = params.oscillators || [];
 
     const now = Tone.now();
 
-    const oscillators = oscDefs.map(def => {
-        const targetFreq = (def.frequency != null)
-            ? def.frequency
-            : Tone.Frequency(note).toFrequency();
+    const oscillators = oscDefs.map((def) => {
+        const targetFreq = def.frequency ?? 440;  // Default to A4 if not specified
 
-        // If slideFrom is provided and portamento > 0, start there; else start at target
         const startFreq = (portamento > 0 && def.slideFrom != null)
             ? def.slideFrom
             : targetFreq;
@@ -69,22 +64,29 @@ const PlayPatch = async (patch) => {
 
         const gain = new Tone.Gain(def.gain ?? 1);
         osc.connect(gain);
-        (filter ? gain.connect(filter) : gain.connect(envelope));
+        
+        // Create individual filter for each oscillator
+        const filter = createFilter(def.filter);
+        if (filter) {
+            gain.connect(filter);
+            filter.connect(envelope);
+        } else {
+            gain.connect(envelope);
+        }
 
         // Schedule the glide after start if needed
         if (portamento > 0 && startFreq !== targetFreq) {
-            // Use an exponential ramp for a natural glide
             osc.frequency.exponentialRampToValueAtTime(targetFreq, now + portamento);
         }
 
-        return { osc, gain };
+        return { osc, gain, filter };
     });
 
-    // Noise (optional)
+    // Noise
     const noise = new Tone.Noise('white');
     noise.volume.value = noiseLevel;
     if (noiseLevel > -60) {
-        (filter ? noise.connect(filter) : noise.connect(envelope));
+        noise.connect(envelope);
     }
 
     // Start and trigger
@@ -96,9 +98,20 @@ const PlayPatch = async (patch) => {
         noise.stop(now + Tone.Time(duration).toSeconds());
     }
 
-    // Stop oscillators after duration (with a tiny safety margin)
+    // Stop oscillators after duration
     const stopAt = now + Tone.Time(duration).toSeconds() + 0.01;
     oscillators.forEach(({ osc }) => osc.stop(stopAt));
+
+    // Cleanup
+    setTimeout(() => {
+        oscillators.forEach(({ osc, filter }) => {
+            osc.dispose();
+            if (filter) filter.dispose();
+        });
+        if (noiseLevel > -60) noise.dispose();
+        envelope.dispose();
+        master.dispose(); // Add master to cleanup
+    }, Tone.Time(duration).toMilliseconds() + 50);
 };
 
 export default PlayPatch;

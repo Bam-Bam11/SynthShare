@@ -71,6 +71,7 @@ const toSerializablePatch = (p) => {
     note: p.note ?? 'C4',
     duration: p.duration ?? '8n',
     parameters: p.parameters ?? p.params ?? null,
+    is_deleted: p.is_deleted ?? false,
   };
 };
 
@@ -86,6 +87,7 @@ const normalizeServerPatch = (p, idOverride = null) => {
     note: p?.note || 'C4',
     duration: p?.duration || '8n',
     parameters: params,
+    is_deleted: p?.is_deleted ?? false,
   };
 };
 
@@ -132,29 +134,44 @@ async function fetchAllPatchesForUser(uid, basePath = '/patches/') {
   return out;
 }
 
+// UPDATED: Filter out deleted patches from import list
 async function loadUserPatches() {
   const uid = await getCurrentUserId();
   for (const base of PATCH_BASES) {
-    try { return await fetchAllPatchesForUser(uid, base); }
+    try { 
+      const patches = await fetchAllPatchesForUser(uid, base);
+      // Filter out deleted patches from the import list
+      return patches.filter(patch => !patch.is_deleted);
+    }
     catch { /* try next base */ }
   }
   return [];
 }
 
+// UPDATED: Handle deleted tracks
 async function fetchTrackById(trackId) {
   for (const base of TRACK_BASES) {
     try {
       const { data } = await API.get(`${base}${trackId}/`);
+      // Check if track is deleted and handle appropriately
+      if (data.is_deleted) {
+        throw new Error('This track has been deleted');
+      }
       return data; // composition-based now
     } catch { /* try next base */ }
   }
   throw new Error('Could not fetch track');
 }
 
+// UPDATED: Handle deleted patches
 async function fetchPatchById(id) {
   for (const base of PATCH_BASES) {
     try {
       const { data } = await API.get(`${base}${id}/`);
+      // Check if patch is deleted and handle appropriately
+      if (data.is_deleted) {
+        throw new Error('This patch has been deleted');
+      }
       return data;
     } catch { /* try next base */ }
   }
@@ -171,6 +188,10 @@ export default function ComposePanel() {
   // State for draft loading
   const [draft, setDraft] = useState(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
+
+  // Track loading state
+  const [hasLoadedTrack, setHasLoadedTrack] = useState(false);
+  const [isLoadingTrack, setIsLoadingTrack] = useState(false);
 
   // Load user-scoped draft on component mount
   useEffect(() => {
@@ -206,9 +227,18 @@ export default function ComposePanel() {
   const [saving, setSaving] = useState(false);
   const [trackId, setTrackId] = useState(null);
 
-  // Initialize state from draft once it's loaded
+  // Keep lineage hints between saves (root/stem)
+  const lineageRef = useRef({ root: null, stem: null });
+  // Add this ref to track loading state
+  const isProcessingLoadRef = useRef(false);
+  // Add this ref to track current clips for confirmation dialogs
+  const clipsRef = useRef([]);
+  // Add this ref to prevent draft interference during track loading
+  const isLoadingTrackRef = useRef(false);
+
+  // Initialize state from draft once it's loaded - BUT skip if we're loading a track
   useEffect(() => {
-    if (draftLoaded && draft) {
+    if (draftLoaded && draft && !isLoadingTrackRef.current) {
       setBpm(typeof draft.bpm === 'number' ? draft.bpm : DEFAULT_BPM);
       setLanes(typeof draft.lanes === 'number' ? Math.max(LANES_MIN, draft.lanes) : LANES_MIN);
       setPxPerBeat(typeof draft.pxPerBeat === 'number' ? Math.max(10, draft.pxPerBeat) : INITIAL_PX_PER_BEAT);
@@ -235,9 +265,6 @@ export default function ComposePanel() {
     if (routeTrackId) setTrackId(routeTrackId);
   }, [routeTrackId]);
 
-  // Keep lineage hints between saves (root/stem)
-  const lineageRef = useRef({ root: null, stem: null });
-
   // ensure laneMeta size follows lanes
   useEffect(() => {
     setLaneMeta((prev) => {
@@ -247,10 +274,152 @@ export default function ComposePanel() {
     });
   }, [lanes]);
 
+  // Update clipsRef whenever clips change
+  useEffect(() => {
+    clipsRef.current = clips;
+  }, [clips]);
+
+  // ===== FIXED: Load track data from localStorage (fork/edit) =====
+  useEffect(() => {
+    if (!draftLoaded || isProcessingLoadRef.current) return;
+    
+    const loadTrackData = async () => {
+      // Use ref to get current clips value to avoid stale closure
+      const currentClips = clipsRef.current;
+      
+      try {
+        const raw = localStorage.getItem('trackToLoad');
+        if (!raw) return;
+        
+        const seed = JSON.parse(raw);
+        console.log('[localStorage] Loading track data into composer from localStorage:', seed);
+
+        // Check if there are existing clips and ask for confirmation
+        if (currentClips.length > 0) {
+          const shouldOverwrite = window.confirm(
+            'You have unsaved changes in your current project. Do you want to overwrite them with the selected track?'
+          );
+          
+          if (!shouldOverwrite) {
+            console.log('[localStorage] User cancelled track load to preserve current work');
+            localStorage.removeItem('trackToLoad');
+            return;
+          }
+        }
+
+        // Set loading flags IMMEDIATELY
+        isProcessingLoadRef.current = true;
+        setIsLoadingTrack(true);
+        isLoadingTrackRef.current = true; // Prevent draft interference
+        
+        // MARK AS LOADED FROM LOCALSTORAGE FIRST - this prevents hydrate
+        setHasLoadedTrack(true);
+
+        // Clear the storage FIRST so hydrate doesn't trigger prematurely
+        localStorage.removeItem('trackToLoad');
+
+        // Clear existing state first
+        setProjectName(seed.name || 'Untitled');
+        setProjectDesc(seed.description || '');
+        setBpm(seed.bpm || DEFAULT_BPM);
+        setClips([]); // IMPORTANT: Clear clips immediately
+
+        // Set lineage for saving
+        lineageRef.current = {
+          root: seed.root || seed.id || null,
+          stem: seed.id || null,
+        };
+
+        let newClips = [];
+        
+        // If we have pre-loaded patches and composition, use them
+        if (seed.patches && seed.normalizedComposition) {
+          console.log('[localStorage] Loading from normalized composition with patches:', seed.patches);
+          
+          newClips = seed.normalizedComposition.map((clip, i) => {
+            const patchData = seed.patches[clip.patchId];
+            console.log(`[localStorage] Clip ${i}:`, clip, 'Patch data:', patchData);
+            
+            const labelText = patchData?.displayName || patchData?.name || 
+                            (clip.patchId ? `Patch ${clip.patchId}` : 'Patch');
+            
+            return {
+              id: `seedc-${i}-${Date.now()}`,
+              lane: Number(clip.lane ?? i),
+              startBeat: clip.startBeat,
+              lengthBeats: Math.max(0.25, clip.endBeat - clip.startBeat),
+              label: labelText,
+              patch: patchData || { id: clip.patchId || null },
+            };
+          });
+        }
+        // Handle case where we have composition data but no pre-loaded patches
+        else if (seed.composition && Array.isArray(seed.composition.clips)) {
+          console.log('[localStorage] Loading from composition.clips without pre-loaded patches');
+          
+          newClips = seed.composition.clips.map((clip, i) => {
+            const start = Number((clip.start ?? clip.start_beat) ?? 0);
+            const end = Number((clip.end ?? clip.end_beat) ?? start);
+            const pid = getPatchId(clip.patch ?? clip.patch_id);
+            
+            return {
+              id: `comp-${i}-${Date.now()}`,
+              lane: Number(clip.lane ?? i),
+              startBeat: start,
+              lengthBeats: Math.max(0.25, end - start),
+              label: `Patch ${pid ?? ''}`.trim(),
+              patch: { id: pid || null },
+            };
+          });
+        }
+        else {
+          console.warn('[localStorage] No valid track data found in seed:', seed);
+          newClips = [];
+        }
+
+        console.log('[localStorage] Created new clips:', newClips);
+
+        // Calculate layout requirements
+        const maxLane = newClips.length > 0 ? Math.max(LANES_MIN, ...newClips.map(c => c.lane + 1)) : LANES_MIN;
+        const lastEnd = newClips.length > 0 ? Math.max(0, ...newClips.map(c => c.startBeat + c.lengthBeats)) : DEFAULT_BEATS;
+        
+        // Update all state in a single batch to prevent race conditions
+        setLanes(maxLane);
+        setLengthBeats(Math.max(DEFAULT_BEATS, Math.ceil(lastEnd)));
+        setClips(newClips); // Set clips last to ensure everything else is ready
+        
+        console.log(`[localStorage] Loaded ${newClips.length} clips, ${maxLane} lanes, ${lastEnd} beats`);
+
+        // IMPORTANT: Set trackId LAST after all other state is populated
+        // This prevents the hydrate effect from running prematurely
+        if (seed.id) {
+          console.log('[localStorage] Setting trackId to:', seed.id);
+          setTrackId(seed.id);
+        }
+        
+      } catch (error) {
+        console.error('[localStorage] Failed to load track data:', error);
+        localStorage.removeItem('trackToLoad');
+        // Reset hasLoadedTrack on error
+        setHasLoadedTrack(false);
+      } finally {
+        // Reset loading flags after a short delay to ensure track data is fully loaded
+        setTimeout(() => {
+          console.log('[localStorage] Resetting isLoading flags');
+          isProcessingLoadRef.current = false;
+          setIsLoadingTrack(false);
+          isLoadingTrackRef.current = false;
+        }, 1000);
+      }
+    };
+
+    loadTrackData();
+  }, [draftLoaded]); // Remove clips.length from dependencies to prevent infinite loops
+
   // ---- persist auto-draft on change - NOW USER-SCOPED ----
   useEffect(() => {
-    if (!draftLoaded) return;
-    
+    if (!draftLoaded || isLoadingTrack || isLoadingTrackRef.current) return; // Don't persist if we're loading a track
+      
     const persistDraft = async () => {
       try {
         const userId = await getCurrentUserId();
@@ -269,70 +438,7 @@ export default function ComposePanel() {
     };
 
     persistDraft();
-  }, [projectName, projectDesc, bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta, draftLoaded]);
-
-  // ---- load seed from TrackDetail (fork/edit) and capture lineage ----
-  useEffect(() => {
-    if (!draftLoaded) return;
-    
-    try {
-      const raw = localStorage.getItem('trackToLoad');
-      if (!raw) return;
-      const seed = JSON.parse(raw);
-
-      if (seed.name) setProjectName(seed.name);
-      if (typeof seed.bpm === 'number') setBpm(seed.bpm);
-      if (typeof seed.description === 'string') setProjectDesc(seed.description);
-
-      // Prefer composition.clips if present, else (temporary) items
-      let clipsFromSeed = [];
-      if (seed && typeof seed.composition === 'object' && Array.isArray(seed.composition?.clips)) {
-        clipsFromSeed = seed.composition.clips.map((row, i) => {
-          const start = Number((row.start ?? row.start_beat) ?? 0);
-          const end = Number((row.end ?? row.end_beat) ?? start);
-          const pid = getPatchId(row.patch ?? row.patch_id);
-          return {
-            id: `seedc-${i}-${Date.now()}`,
-            lane: Number(row.lane ?? i),
-            startBeat: start,
-            lengthBeats: Math.max(0.25, end - start),
-            label: `Patch ${pid ?? ''}`.trim(),
-            patch: { id: pid || null },
-          };
-        });
-      } else if (Array.isArray(seed.items) && seed.items.length) {
-        clipsFromSeed = seed.items.map((it, i) => ({
-          id: `seedi-${i}-${Date.now()}`,
-          lane: Number(it.order_index ?? i),
-          startBeat: Number(it.start_beat ?? 0),
-          lengthBeats: Math.max(0.25, Number(it.length_beats ?? 1)),
-          label: it.label || `Lane ${Number(it.order_index ?? i) + 1}`,
-          patch: {
-            id: getPatchId(it.patch ?? it.patch_id ?? it),
-            name: it.patch_name || (getPatchId(it.patch ?? it.patch_id ?? it) ? `Patch ${getPatchId(it.patch ?? it.patch_id ?? it)}` : null),
-            parameters: it.patch_snapshot ?? null,
-          },
-        }));
-      }
-
-      if (clipsFromSeed.length) {
-        const maxLane = Math.max(LANES_MIN, ...clipsFromSeed.map(c => c.lane + 1));
-        const lastEnd = Math.max(0, ...clipsFromSeed.map(c => c.startBeat + c.lengthBeats));
-        setLanes(maxLane);
-        if (lastEnd > lengthBeats) setLengthBeats(Math.ceil(lastEnd));
-        setClips(clipsFromSeed);
-      }
-
-      lineageRef.current = {
-        root: seed.root ?? null,
-        stem: seed.stem ?? null,
-      };
-    } catch {}
-    finally {
-      try { localStorage.removeItem('trackToLoad'); } catch {}
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftLoaded]);
+  }, [projectName, projectDesc, bpm, lanes, pxPerBeat, lengthBeats, clips, laneMeta, draftLoaded, isLoadingTrack]);
 
   // ---- derived layout/time ----
   const secPerBeat = 60 / bpm;
@@ -576,7 +682,9 @@ export default function ComposePanel() {
     const playable = clips.filter((clip) => {
       const lane = laneMeta[clip.lane];
       const lanePlayable = lane && (anySolo ? lane.solo : !lane.mute);
-      return lanePlayable && getPatchId(clip.patch) != null;
+      const patchId = getPatchId(clip.patch);
+      const isDeleted = clip.patch?.is_deleted;
+      return lanePlayable && patchId != null && !isDeleted;
     });
 
     // Just-in-time enrichment: fetch any patches missing parameters or a name
@@ -593,13 +701,25 @@ export default function ComposePanel() {
         const id = missingIds[i];
         if (res.status === 'fulfilled' && res.value) {
           enrichMap.set(id, normalizeServerPatch(res.value, id));
+        } else if (res.status === 'rejected') {
+          // Handle deleted patches - mark them as unavailable
+          console.warn(`Patch ${id} could not be loaded:`, res.reason);
+          enrichMap.set(id, { 
+            id, 
+            name: 'Unavailable Patch', 
+            displayName: 'Unavailable Patch',
+            note: 'C4',
+            duration: '8n',
+            parameters: null,
+            is_deleted: true 
+          });
         }
       });
 
       if (enrichMap.size) {
         // Update state so UI labels also improve
         setClips(prev =>
-          prev.map(c => {
+          prev.map((c) => {
             const id = getPatchId(c.patch);
             return enrichMap.has(id) ? { ...c, patch: enrichMap.get(id) } : c;
           })
@@ -615,7 +735,7 @@ export default function ComposePanel() {
           ? clip.patch
           : (enrichMap.get(pid) ?? { ...clip.patch }); // if enrichment failed, still try
 
-      if (!resolved?.parameters) return; // cannot play without a synth snapshot
+      if (!resolved?.parameters || resolved?.is_deleted) return; // cannot play without a synth snapshot or if deleted
 
       const triggerAtSec = clip.startBeat * secPerBeat;
       transport.schedule((time) => {
@@ -725,6 +845,10 @@ export default function ComposePanel() {
     cancelAnimationFrame(rafRef.current);
     rafRef.current = 0;
 
+    // Set loading flag to prevent draft persistence during reset
+    setIsLoadingTrack(true);
+    isLoadingTrackRef.current = true;
+
     // reset UI/transport state
     setIsPlaying(false);
     setPlayheadBeat(0);
@@ -752,6 +876,7 @@ export default function ComposePanel() {
     // clear lineage / server link
     lineageRef.current = { root: null, stem: null };
     setTrackId(null);
+    setHasLoadedTrack(false); // Reset track loading state
 
     // clear local persisted draft + any pending seed
     try { 
@@ -760,6 +885,12 @@ export default function ComposePanel() {
       localStorage.removeItem(userDraftKey); 
     } catch {}
     try { localStorage.removeItem('trackToLoad'); } catch {}
+
+    // Reset loading flag after state is cleared
+    setTimeout(() => {
+      setIsLoadingTrack(false);
+      isLoadingTrackRef.current = false;
+    }, 500);
   };
 
   useEffect(() => {
@@ -892,6 +1023,9 @@ export default function ComposePanel() {
 
     const baseClips = clips.filter(c => nextSelected.has(c.id)).map(c => ({ ...c }));
 
+    // Don't allow dragging/resizing of deleted patches
+    if (clip.patch?.is_deleted) return;
+
     if (handle === 'l' || handle === 'r') {
       startDrag(handle === 'l' ? 'resize-l' : 'resize-r', e, baseClips, false);
     } else {
@@ -919,6 +1053,9 @@ export default function ComposePanel() {
         if (!setIds.has(c.id)) return c;
         const base = ds.baseClips.find(b => b.id === c.id);
         if (!base) return c;
+
+        // Don't allow moving/resizing deleted patches
+        if (c.patch?.is_deleted) return c;
 
         if (ds.mode === 'move') {
           const newStart = snap16(base.startBeat + dBeat);
@@ -953,6 +1090,8 @@ export default function ComposePanel() {
         if (!baseMap.has(c.id)) return c;
         const current = c;
         const original = baseMap.get(c.id);
+        // Don't clone deleted patches
+        if (current.patch?.is_deleted) return current;
         const dup = { ...current, id: current.id + '-clone-' + Date.now() + Math.random().toString(36).slice(2,3) };
         clones.push(dup);
         return original;
@@ -1238,13 +1377,26 @@ export default function ComposePanel() {
   };
   // ===== END Project persistence =====
 
-  // ===== Hydrate from server when editing an existing track (eager enrichment) =====
+  // ===== FIXED: Hydrate from server when editing an existing track (eager enrichment) =====
   useEffect(() => {
-    if (!trackId) return;
+    // Only hydrate if we have a trackId AND we haven't already loaded a track from localStorage
+    // AND we're not currently loading a track
+    if (!trackId || hasLoadedTrack || isLoadingTrack) {
+      console.log(`[hydrate] Skipping track hydration: trackId=${trackId}, hasLoadedTrack=${hasLoadedTrack}, isLoadingTrack=${isLoadingTrack}`);
+      return;
+    }
+    
+    // ... rest of hydrate effect
+    
     (async () => {
       try {
+        console.log('[hydrate] Starting server hydration for track:', trackId);
         const data = await fetchTrackById(trackId);
-        console.log('[edit] GET track', data);
+        console.log('[hydrate] GET track', data);
+
+        // Set loading flag to prevent draft persistence
+        setIsLoadingTrack(true);
+        isLoadingTrackRef.current = true;
 
         // 1) Rows from composition.clips
         const rows = Array.isArray(data?.composition?.clips) ? data.composition.clips : [];
@@ -1264,6 +1416,18 @@ export default function ComposePanel() {
           const id = needIds[i];
           if (res.status === 'fulfilled' && res.value) {
             byId.set(id, normalizeServerPatch(res.value, id));
+          } else if (res.status === 'rejected') {
+            // Handle deleted patches in track composition
+            console.warn(`[hydrate] Patch ${id} in track composition could not be loaded:`, res.reason);
+            byId.set(id, { 
+              id, 
+              name: 'Unavailable Patch', 
+              displayName: 'Unavailable Patch',
+              note: 'C4',
+              duration: '8n',
+              parameters: null,
+              is_deleted: true 
+            });
           }
         });
 
@@ -1302,13 +1466,25 @@ export default function ComposePanel() {
 
         // 6) Lineage so the next Save creates a new version in same fork
         lineageRef.current = { root: data.root ?? null, stem: data.id ?? null };
+        
+        // 7) Mark that we've loaded the track from server
+        setHasLoadedTrack(true);
+        
+        console.log(`[hydrate] Hydrated track ${trackId} with ${rebuilt.length} clips`);
       } catch (e) {
-        console.error('Failed to load track for edit:', e);
+        console.error('[hydrate] Failed to load track for edit:', e);
         alert('Could not load track details.');
+      } finally {
+        // Reset loading flag after a short delay to ensure track data is fully loaded
+        setTimeout(() => {
+          console.log('[hydrate] Resetting isLoadingTrack flag');
+          setIsLoadingTrack(false);
+          isLoadingTrackRef.current = false;
+        }, 1000);
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trackId]);
+  }, [trackId]); // Remove hasLoadedTrack from dependencies
   // ===== End hydrate =====
 
   // ===== auto-enrich whenever clips contain patches missing names/params =====
@@ -1340,11 +1516,23 @@ export default function ComposePanel() {
         const id = ids[i];
         if (res.status === 'fulfilled' && res.value) {
           map.set(id, normalizeServerPatch(res.value, id));
+        } else if (res.status === 'rejected') {
+          // Handle deleted patches - mark them as unavailable
+          console.warn(`Patch ${id} could not be loaded:`, res.reason);
+          map.set(id, { 
+            id, 
+            name: 'Unavailable Patch', 
+            displayName: 'Unavailable Patch',
+            note: 'C4',
+            duration: '8n',
+            parameters: null,
+            is_deleted: true 
+          });
         }
       });
 
       if (map.size) {
-        setClips((prev) =>
+        setClips(prev =>
           prev.map((c) => {
             const id = getPatchId(c.patch);
             return map.has(id) ? { ...c, patch: map.get(id) } : c;
@@ -1453,11 +1641,17 @@ export default function ComposePanel() {
             disabled={isFetchingPatches}
           >
             <option value="">{isFetchingPatches ? 'Loading...' : 'Select a patch...'}</option>
-            {patches.map((p) => (
-              <option key={getPatchId(p)} value={getPatchId(p)}>
-                {(p.name && p.name.trim()) || `Patch ${getPatchId(p)}`} {p.is_posted ? '(posted)' : '(saved)'}
-              </option>
-            ))}
+            {patches.map((p) => {
+              const patchId = getPatchId(p);
+              const isDeleted = p.is_deleted;
+              return (
+                <option key={patchId} value={patchId} disabled={isDeleted}>
+                  {(p.name && p.name.trim()) || `Patch ${patchId}`} 
+                  {p.is_posted ? '(posted)' : '(saved)'}
+                  {isDeleted && ' (deleted)'}
+                </option>
+              );
+            })}
           </select>
 
           <label htmlFor="importLaneSelect">to lane:</label>
@@ -1731,7 +1925,7 @@ export default function ComposePanel() {
           />
         )}
 
-        {/* Patches (tiles) - FIXED: Visual feedback for muted lanes */}
+        {/* Patches (tiles) - UPDATED: Visual feedback for deleted patches */}
         <div style={{ position: 'absolute', left: LANE_GUTTER, top: 0, height: '100%', width: totalWidthPx }}>
           {clips.map((c) => {
             const left = c.startBeat * pxPerBeat;
@@ -1743,9 +1937,12 @@ export default function ComposePanel() {
 
             const pid = getPatchId(c.patch);
             const pName = c.patch?.displayName ?? c.patch?.name ?? null;
-            const labelText = pName
-              ? `${pName} (${pid ?? ''})`
-              : (c.label || (pid != null ? `Patch ${pid}` : 'Patch'));
+            const isDeleted = c.patch?.is_deleted;
+            const labelText = isDeleted 
+              ? 'Deleted Patch'
+              : pName
+                ? `${pName} (${pid ?? ''})`
+                : (c.label || (pid != null ? `Patch ${pid}` : 'Patch'));
 
             return (
               <div
@@ -1760,48 +1957,55 @@ export default function ComposePanel() {
                   else onClipMouseDown(e, c, null);
                 }}
                 onClick={(e) => { e.stopPropagation(); }}
-                title={`Patch: ${labelText} @ ${fmtTime(c.startBeat * secPerBeat)} • ${meta.name}${meta.mute ? ' (MUTED)' : ''}${meta.solo ? ' (SOLO)' : ''}`}
+                title={`Patch: ${labelText} @ ${fmtTime(c.startBeat * secPerBeat)} • ${meta.name}${meta.mute ? ' (MUTED)' : ''}${meta.solo ? ' (SOLO)' : ''}${isDeleted ? ' (DELETED)' : ''}`}
                 style={{
                   position: 'absolute',
                   left,
                   top,
                   width,
                   height: LANE_HEIGHT - 12,
-                  background: meta.mute ? laneColor + '11' : laneColor + '33',
-                  border: `2px solid ${sel ? '#ff5a5a' : (meta.mute ? laneColor + '66' : laneColor)}`,
+                  background: isDeleted 
+                    ? '#ffebee33' 
+                    : (meta.mute ? laneColor + '11' : laneColor + '33'),
+                  border: `2px solid ${isDeleted ? '#f44336' : (sel ? '#ff5a5a' : (meta.mute ? laneColor + '66' : laneColor))}`,
                   borderRadius: 6,
                   boxSizing: 'border-box',
                   overflow: 'hidden',
-                  cursor: pickingLoop ? 'crosshair' : 'grab',
-                  // FIXED: Visual feedback for muted lanes
-                  opacity: meta.mute ? 0.4 : 1,
+                  cursor: pickingLoop ? 'crosshair' : (isDeleted ? 'not-allowed' : 'grab'),
+                  opacity: isDeleted ? 0.5 : (meta.mute ? 0.4 : 1),
                 }}
               >
-                {/* resize handles */}
-                <div
-                  style={{
-                    position: 'absolute', left: 0, top: 0, bottom: 0, width: 8,
-                    cursor: 'ew-resize', background: sel ? '#00000012' : 'transparent',
-                  }}
-                />
-                <div
-                  style={{
-                    position: 'absolute', right: 0, top: 0, bottom: 0, width: 8,
-                    cursor: 'ew-resize', background: sel ? '#00000012' : 'transparent',
-                  }}
-                />
+                {/* resize handles - disabled for deleted patches */}
+                {!isDeleted && (
+                  <>
+                    <div
+                      style={{
+                        position: 'absolute', left: 0, top: 0, bottom: 0, width: 8,
+                        cursor: 'ew-resize', background: sel ? '#00000012' : 'transparent',
+                      }}
+                    />
+                    <div
+                      style={{
+                        position: 'absolute', right: 0, top: 0, bottom: 0, width: 8,
+                        cursor: 'ew-resize', background: sel ? '#00000012' : 'transparent',
+                      }}
+                    />
+                  </>
+                )}
                 <div style={{ 
                   padding: '4px 8px', 
                   fontSize: 12, 
                   whiteSpace: 'nowrap', 
                   overflow: 'hidden', 
                   textOverflow: 'ellipsis',
-                  // FIXED: Visual feedback for muted lanes
                   opacity: meta.mute ? 0.7 : 1,
+                  textDecoration: isDeleted ? 'line-through' : 'none',
+                  color: isDeleted ? '#f44336' : 'inherit',
                 }}>
                   {labelText}
                   {meta.mute && ' 🔇'}
                   {meta.solo && ' 🎵'}
+                  {isDeleted && ' ❌'}
                 </div>
               </div>
             );

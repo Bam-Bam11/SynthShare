@@ -28,13 +28,19 @@ class PatchViewSet(viewsets.ModelViewSet):
         user = self.request.user
         uploaded_by = self.request.query_params.get('uploaded_by')
 
+        # FIXED: Use Patch.objects instead of Track.objects
         queryset = Patch.objects.all().order_by('-created_at')
 
         if uploaded_by:
-            if str(user.id) == uploaded_by:
-                queryset = queryset.filter(uploaded_by__id=uploaded_by)
-            else:
-                queryset = queryset.filter(uploaded_by__id=uploaded_by, is_posted=True)
+            try:
+                uploaded_by_id = int(uploaded_by)  # Convert to int for comparison
+                if user.is_authenticated and user.id == uploaded_by_id:
+                    queryset = queryset.filter(uploaded_by__id=uploaded_by_id)
+                else:
+                    queryset = queryset.filter(uploaded_by__id=uploaded_by_id, is_posted=True)
+            except (ValueError, TypeError):
+                # If uploaded_by is not a valid integer, return empty queryset
+                queryset = queryset.none()
         else:
             queryset = queryset.filter(is_posted=True)
 
@@ -44,18 +50,50 @@ class PatchViewSet(viewsets.ModelViewSet):
         serializer.save()
 
     def get_object(self):
-        queryset = Patch.objects.all()
+        # Use with_deleted() to allow access to deleted patches for lineage/owners
+        queryset = Patch.objects.with_deleted()
         patch = get_object_or_404(queryset, pk=self.kwargs['pk'])
+
+        # If patch is deleted, only allow access to owner
+        if patch.is_deleted and patch.uploaded_by != self.request.user:
+            raise PermissionDenied('This patch has been deleted.')
 
         if patch.uploaded_by != self.request.user and not patch.is_posted:
             raise PermissionDenied('This patch is not publicly available.')
 
         return patch
 
+    # ADD: Override destroy method to handle soft deletion
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.uploaded_by != request.user:
+            return Response({'detail': 'Not allowed'}, status=403)
+        
+        # Soft delete instead of hard delete
+        instance.is_deleted = True
+        instance.save(update_fields=['is_deleted'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # ADD: Override update method to handle is_deleted field
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        # If user is trying to update is_deleted, check permissions
+        if 'is_deleted' in request.data and instance.uploaded_by != request.user:
+            return Response({'detail': 'Only owner can delete/restore patches'}, status=403)
+            
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        return Response(serializer.data)
+
     # /api/patches/posted-by/<username>/?page=1&page_size=12
     @action(detail=False, methods=['get'], url_path=r'posted-by/(?P<username>[^/.]+)')
     def posted_by(self, request, username=None):
         user = get_object_or_404(User, username=username)
+        # Exclude deleted patches from public listings
         qs = Patch.objects.filter(uploaded_by=user, is_posted=True).order_by('-created_at')
         page = self.paginate_queryset(qs)
         if page is not None:
@@ -71,7 +109,8 @@ class PatchViewSet(viewsets.ModelViewSet):
         user = get_object_or_404(User, username=username)
         if request.user != user:
             return Response({'detail': 'Forbidden'}, status=403)
-        qs = Patch.objects.filter(uploaded_by=user, is_posted=False).order_by('-created_at')
+        # Owner can see their saved patches, even if deleted (for recovery)
+        qs = Patch.objects.with_deleted().filter(uploaded_by=user, is_posted=False).order_by('-created_at')
         page = self.paginate_queryset(qs)
         if page is not None:
             serializer = PatchSerializer(page, many=True, context={'request': request})
@@ -84,7 +123,8 @@ class PatchViewSet(viewsets.ModelViewSet):
 @permission_classes([permissions.IsAuthenticated])
 def post_patch(request, pk):
     try:
-        patch = Patch.objects.get(pk=pk, uploaded_by=request.user)
+        # Use with_deleted() so owners can post/unpost deleted patches
+        patch = Patch.objects.with_deleted().get(pk=pk, uploaded_by=request.user)
         patch.is_posted = True
         patch.save(update_fields=['is_posted'])
         return Response({'success': 'Patch has been posted.'})
@@ -96,7 +136,8 @@ def post_patch(request, pk):
 @permission_classes([permissions.IsAuthenticated])
 def unpost_patch(request, pk):
     try:
-        patch = Patch.objects.get(pk=pk, uploaded_by=request.user)
+        # Use with_deleted() so owners can post/unpost deleted patches
+        patch = Patch.objects.with_deleted().get(pk=pk, uploaded_by=request.user)
         patch.is_posted = False
         patch.save(update_fields=['is_posted'])
         return Response({'success': 'Patch has been unposted.'})
@@ -227,6 +268,7 @@ class FollowViewSet(viewsets.ModelViewSet):
 def feed_view(request):
     user = request.user
     followed_users = Follow.objects.filter(follower=user).values_list('following', flat=True)
+    # Exclude deleted patches from feed
     qs = Patch.objects.filter(uploaded_by__in=followed_users, is_posted=True).order_by('-created_at')
 
     paginator = SmallPageNumberPagination()
@@ -238,6 +280,7 @@ def feed_view(request):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def random_posted_patch(request):
+    # Exclude deleted patches from random selection
     patches = list(Patch.objects.filter(is_posted=True))
     if not patches:
         return Response({'error': 'No posted patches available.'}, status=404)
@@ -257,11 +300,29 @@ def lineage_view(request, pk):
     Patch lineage graph payload.
     """
     try:
-        current_patch = Patch.objects.select_related('uploaded_by', 'root', 'immediate_predecessor').get(pk=pk)
+        # Use with_deleted() to include deleted patches in lineage
+        current_patch = Patch.objects.with_deleted().select_related('uploaded_by', 'root', 'immediate_predecessor').get(pk=pk)
     except Patch.DoesNotExist:
         return Response({'error': 'Patch not found.'}, status=404)
 
+    # Handle case where root is deleted - find the effective root
     root = current_patch.root or current_patch
+    
+    # If the root is deleted, try to find the oldest non-deleted ancestor in the same lineage
+    if root.is_deleted:
+        # Find all patches with the same root ID that aren't deleted
+        living_roots = Patch.objects.with_deleted().filter(
+            root_id=root.id, 
+            is_deleted=False
+        ).order_by('created_at')
+        
+        if living_roots.exists():
+            # Use the oldest living patch with this root as the effective root
+            root = living_roots.first()
+        else:
+            # If all patches with this root are deleted, we have to work with what we have
+            # Build the graph from all patches with this root ID, even if all are deleted
+            pass
 
     if request.user.id == current_patch.uploaded_by_id:
         visible_q = Q(root=root)
@@ -273,14 +334,21 @@ def lineage_view(request, pk):
             n = n.immediate_predecessor
         visible_q = Q(root=root) & (Q(is_posted=True) | Q(id__in=ancestor_ids))
 
+    # Use with_deleted() to include deleted patches in lineage
     patches = (
-        Patch.objects.filter(visible_q)
+        Patch.objects.with_deleted().filter(visible_q)
         .select_related('uploaded_by', 'immediate_predecessor')
         .order_by('created_at', 'id')
     )
+    
+    # If we have no patches but the current patch exists, include at least the current patch
+    if not patches.exists() and current_patch:
+        patches = Patch.objects.with_deleted().filter(id=current_patch.id)
+
     if not patches:
         return Response({'nodes': [], 'edges': []})
 
+    # Rest of your existing lineage logic remains the same...
     def parse_version(ver: str):
         try:
             f_str, e_str = (ver or '0.0').split('.', 1)
@@ -296,6 +364,7 @@ def lineage_view(request, pk):
         if pred_id and pred_id in by_id:
             children[pred_id].append(p.id)
 
+    # Use the effective root ID for graph building
     root_id = root.id
 
     depth = {root_id: 0}
@@ -307,6 +376,7 @@ def lineage_view(request, pk):
                 depth[cid] = depth[cur] + 1
                 q.append(cid)
 
+    # Continue with your existing sibling_rank, chrono_rank, and coordinate logic...
     sibling_rank = {}
     for pred_id, kids in children.items():
         groups = defaultdict(list)
@@ -373,6 +443,7 @@ def lineage_view(request, pk):
             'version': p.version,
             'downloads': p.downloads,
             'is_posted': p.is_posted,
+            'is_deleted': p.is_deleted,
             'uploaded_by': p.uploaded_by.username,
             'isCurrent': (p.id == current_patch.id),
             'stem': p.stem_id,
@@ -385,7 +456,6 @@ def lineage_view(request, pk):
 
     return Response({'nodes': nodes, 'edges': edges})
 
-
 # --------------------------
 # TRACKS
 # --------------------------
@@ -397,11 +467,29 @@ def track_lineage_view(request, pk):
     Track lineage graph payload (matches patch layout rules).
     """
     try:
-        current_track = Track.objects.select_related('uploaded_by', 'root', 'immediate_predecessor').get(pk=pk)
+        # Use with_deleted() to include deleted tracks in lineage
+        current_track = Track.objects.with_deleted().select_related('uploaded_by', 'root', 'immediate_predecessor').get(pk=pk)
     except Track.DoesNotExist:
         return Response({'error': 'Track not found.'}, status=404)
 
+    # Handle case where root is deleted - find the effective root
     root = current_track.root or current_track
+    
+    # If the root is deleted, try to find the oldest non-deleted ancestor in the same lineage
+    if root.is_deleted:
+        # Find all tracks with the same root ID that aren't deleted
+        living_roots = Track.objects.with_deleted().filter(
+            root_id=root.id, 
+            is_deleted=False
+        ).order_by('created_at')
+        
+        if living_roots.exists():
+            # Use the oldest living track with this root as the effective root
+            root = living_roots.first()
+        else:
+            # If all tracks with this root are deleted, we have to work with what we have
+            # Build the graph from all tracks with this root ID, even if all are deleted
+            pass
 
     if request.user.id == current_track.uploaded_by_id:
         visible_q = Q(root=root)
@@ -413,11 +501,17 @@ def track_lineage_view(request, pk):
             n = n.immediate_predecessor
         visible_q = Q(root=root) & (Q(is_posted=True) | Q(id__in=ancestor_ids))
 
+    # Use with_deleted() to include deleted tracks in lineage
     tracks = (
-        Track.objects.filter(visible_q)
+        Track.objects.with_deleted().filter(visible_q)
         .select_related('uploaded_by', 'immediate_predecessor')
         .order_by('created_at', 'id')
     )
+    
+    # If we have no tracks but the current track exists, include at least the current track
+    if not tracks.exists() and current_track:
+        tracks = Track.objects.with_deleted().filter(id=current_track.id)
+
     if not tracks:
         return Response({'nodes': [], 'edges': []})
 
@@ -436,6 +530,7 @@ def track_lineage_view(request, pk):
         if pred_id and pred_id in by_id:
             children[pred_id].append(t.id)
 
+    # Use the effective root ID for graph building
     root_id = root.id
 
     depth = {root_id: 0}
@@ -505,6 +600,7 @@ def track_lineage_view(request, pk):
             'version': t.version,
             'downloads': t.downloads,
             'is_posted': t.is_posted,
+            'is_deleted': t.is_deleted,  # Add deletion status for frontend
             'uploaded_by': t.uploaded_by.username,
             'isCurrent': (t.id == current_track.id),
             'stem': t.stem_id,
@@ -526,29 +622,68 @@ class TrackViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         uploaded_by = self.request.query_params.get('uploaded_by')
+        # Use default manager to exclude deleted tracks
         qs = Track.objects.all().order_by('-created_at')
 
         if uploaded_by:
-            if str(user.id) == uploaded_by:
-                qs = qs.filter(uploaded_by__id=uploaded_by)
-            else:
-                qs = qs.filter(uploaded_by__id=uploaded_by, is_posted=True)
+            try:
+                uploaded_by_id = int(uploaded_by)  # Convert to int for comparison
+                if user.is_authenticated and user.id == uploaded_by_id:
+                    qs = qs.filter(uploaded_by__id=uploaded_by_id)
+                else:
+                    qs = qs.filter(uploaded_by__id=uploaded_by_id, is_posted=True)
+            except (ValueError, TypeError):
+                # If uploaded_by is not a valid integer, return empty queryset
+                qs = qs.none()
         else:
             qs = qs.filter(is_posted=True)
 
         return qs.select_related('uploaded_by')
 
     def get_object(self):
-        qs = Track.objects.select_related('uploaded_by')
+        # Use with_deleted() to allow access to deleted tracks for lineage/owners
+        qs = Track.objects.with_deleted().select_related('uploaded_by')
         track = get_object_or_404(qs, pk=self.kwargs['pk'])
+        
+        # If track is deleted, only allow access to owner
+        if track.is_deleted and track.uploaded_by != self.request.user:
+            self.permission_denied(self.request, message='This track has been deleted.')
+            
         if track.uploaded_by != self.request.user and not track.is_posted:
             self.permission_denied(self.request, message='This track is not publicly available.')
         return track
 
+    # ADD: Override destroy method to handle soft deletion
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.uploaded_by != request.user:
+            return Response({'detail': 'Not allowed'}, status=403)
+        
+        # Soft delete instead of hard delete
+        instance.is_deleted = True
+        instance.save(update_fields=['is_deleted'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # ADD: Override update method to handle is_deleted field
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        # If user is trying to update is_deleted, check permissions
+        if 'is_deleted' in request.data and instance.uploaded_by != request.user:
+            return Response({'detail': 'Only owner can delete/restore tracks'}, status=403)
+            
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        return Response(serializer.data)
+
     # POST /tracks/<id>/post/
     @action(detail=True, methods=['post'])
     def post(self, request, pk=None):
-        track = get_object_or_404(Track.objects.select_related('uploaded_by'), pk=pk)
+        # Use with_deleted() so owners can post/unpost deleted tracks
+        track = get_object_or_404(Track.objects.with_deleted().select_related('uploaded_by'), pk=pk)
         if track.uploaded_by_id != request.user.id:
             return Response({'detail': 'Only the owner can post this track.'}, status=status.HTTP_403_FORBIDDEN)
         if not track.is_posted:
@@ -560,7 +695,8 @@ class TrackViewSet(viewsets.ModelViewSet):
     # POST /tracks/<id>/unpost/
     @action(detail=True, methods=['post'])
     def unpost(self, request, pk=None):
-        track = get_object_or_404(Track.objects.select_related('uploaded_by'), pk=pk)
+        # Use with_deleted() so owners can post/unpost deleted tracks
+        track = get_object_or_404(Track.objects.with_deleted().select_related('uploaded_by'), pk=pk)
         if track.uploaded_by_id != request.user.id:
             return Response({'detail': 'Only the owner can unpost this track.'}, status=status.HTTP_403_FORBIDDEN)
         if track.is_posted:
@@ -573,6 +709,7 @@ class TrackViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path=r'posted-by/(?P<username>[^/.]+)')
     def posted_by(self, request, username=None):
         user = get_object_or_404(User, username=username)
+        # Exclude deleted tracks from public listings
         qs = Track.objects.filter(uploaded_by=user, is_posted=True).order_by('-created_at')
         page = self.paginate_queryset(qs)
         ser = TrackSerializer(page or qs, many=True, context={'request': request})
@@ -584,7 +721,8 @@ class TrackViewSet(viewsets.ModelViewSet):
         user = get_object_or_404(User, username=username)
         if request.user != user:
             return Response({'detail': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
-        qs = Track.objects.filter(uploaded_by=user, is_posted=False).order_by('-created_at')
+        # Owner can see their saved tracks, even if deleted (for recovery)
+        qs = Track.objects.with_deleted().filter(uploaded_by=user, is_posted=False).order_by('-created_at')
         page = self.paginate_queryset(qs)
         ser = TrackSerializer(page or qs, many=True, context={'request': request})
         return self.get_paginated_response(ser.data) if page is not None else Response(ser.data)
@@ -596,7 +734,8 @@ def fork_track(request, pk):
     """
     Create a new Track as a fork of pk. Client may optionally pass a mutated composition/items payload.
     """
-    parent = get_object_or_404(Track, pk=pk)
+    # Use with_deleted() to allow forking from deleted tracks
+    parent = get_object_or_404(Track.objects.with_deleted(), pk=pk)
     data = request.data.copy()
     data['root'] = parent.root_id or parent.id
     data['stem'] = parent.id

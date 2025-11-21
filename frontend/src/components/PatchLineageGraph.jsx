@@ -19,7 +19,7 @@ const PatchLineageGraph = ({ patchId }) => {
   useEffect(() => {
     const fetchLineage = async () => {
       try {
-        const res = await API.get(`/patches/${patchId}/lineage/`);
+        const res = await API.get(`/patches/${patchId}/lineage/?include_deleted=true`);
         setNodes(res.data?.nodes || []);
         setEdges(res.data?.edges || []);
       } catch (err) {

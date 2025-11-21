@@ -19,7 +19,7 @@ export default function TrackLineageGraph({ trackId }) {
   useEffect(() => {
     const fetchLineage = async () => {
       try {
-        const res = await API.get(`/tracks/${trackId}/lineage/`);
+        const res = await API.get(`/tracks/${trackId}/lineage/?include_deleted=true`);
         setNodes(res.data?.nodes || []);
         setEdges(res.data?.edges || []);
       } catch (err) {

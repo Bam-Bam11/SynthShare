@@ -26,10 +26,10 @@ class PatchSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description',
             'uploaded_by', 'uploaded_by_id',
-            'parameters', 'synth_type', 'note', 'duration',
+            'parameters', 'synth_type', 'duration',
             'created_at', 'downloads', 'forks',
             'root', 'stem', 'immediate_predecessor',
-            'version', 'is_posted',
+            'version', 'is_posted', 'is_deleted'  # ADD is_deleted here
         ]
         read_only_fields = ['uploaded_by', 'downloads', 'forks', 'created_at', 'version']
 
@@ -135,7 +135,7 @@ class TrackSerializer(serializers.ModelSerializer):
             'uploaded_by', 'uploaded_by_id',
             'bpm', 'created_at', 'downloads', 'forks',
             'root', 'stem', 'immediate_predecessor',
-            'version', 'is_posted',
+            'version', 'is_posted', 'is_deleted'  # ADD is_deleted here
         ]
         read_only_fields = ['uploaded_by', 'downloads', 'forks', 'created_at', 'version']
 

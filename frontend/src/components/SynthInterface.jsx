@@ -55,35 +55,42 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
   const [sustain, setSustain] = useState(0.7);
   const [release, setRelease] = useState(0.5);
 
-  // Filter
-  const [filterType, setFilterType] = useState('none'); // none | lowpass | highpass | bandpass
-  const [resonance, setResonance] = useState(1);
-  const [cutoff, setCutoff] = useState(1000);
-  const [bandLow, setBandLow] = useState(300);
-  const [bandHigh, setBandHigh] = useState(3000);
-
   // Global synthesis
   const [portamento, setPortamento] = useState(0);
   const [noiseLevel, setNoiseLevel] = useState(0); // dB
-  const [note, setNote] = useState('C4'); // legacy fallback if frequency is null
   const [duration, setDuration] = useState('8n');
+  const [masterGain, setMasterGain] = useState(1); // Add Master Gain
 
-  // Oscillator 1 (always enabled)
-  const [oscType, setOscType] = useState('sine');
-  const [detune, setDetune] = useState(0); // cents
+  // Oscillator 1
+  const [osc1Type, setOsc1Type] = useState('sine');
+  const [osc1Detune, setOsc1Detune] = useState(0); // cents
   const [osc1Gain, setOsc1Gain] = useState(1);
-  const [osc1Freq, setOsc1Freq] = useState(null);         // Hz; null => follow note
+  const [osc1Freq, setOsc1Freq] = useState(440);   // Hz; default to A4
   const [osc1SlideFrom, setOsc1SlideFrom] = useState(null); // Hz; optional glide start
 
-  // Oscillator 2 (toggle)
+  // Oscillator 1 Filter
+  const [osc1FilterType, setOsc1FilterType] = useState('none');
+  const [osc1Resonance, setOsc1Resonance] = useState(1);
+  const [osc1Cutoff, setOsc1Cutoff] = useState(1000);
+  const [osc1BandLow, setOsc1BandLow] = useState(300);
+  const [osc1BandHigh, setOsc1BandHigh] = useState(3000);
+
+  // Oscillator 2
   const [osc2Enabled, setOsc2Enabled] = useState(false);
   const [osc2Type, setOsc2Type] = useState('square');
-  const [osc2Gain, setOsc2Gain] = useState(0.8);
   const [osc2Detune, setOsc2Detune] = useState(0);
-  const [osc2Freq, setOsc2Freq] = useState(null);         // Hz; null => follow note
+  const [osc2Gain, setOsc2Gain] = useState(0.8);
+  const [osc2Freq, setOsc2Freq] = useState(440);   // Hz; default to A4
   const [osc2SlideFrom, setOsc2SlideFrom] = useState(null); // Hz; optional glide start
 
-  // Source patch (when editing/forking) — used to send `stem` on save
+  // Oscillator 2 Filter
+  const [osc2FilterType, setOsc2FilterType] = useState('none');
+  const [osc2Resonance, setOsc2Resonance] = useState(1);
+  const [osc2Cutoff, setOsc2Cutoff] = useState(1000);
+  const [osc2BandLow, setOsc2BandLow] = useState(300);
+  const [osc2BandHigh, setOsc2BandHigh] = useState(3000);
+
+  // Source patch (when editing/forking)
   const [sourcePatchId, setSourcePatchId] = useState(null);
 
   // Latest server-saved patch (to show computed version)
@@ -112,45 +119,48 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       setSustain(params.envelope?.sustain ?? 0.7);
       setRelease(params.envelope?.release ?? 0.5);
 
-      // Filter
-      setFilterType(params.filter?.type || 'none');
-      setResonance(params.filter?.resonance ?? 1);
-      setCutoff(params.filter?.cutoff ?? 1000);
-      setBandLow(params.filter?.bandLow ?? 300);
-      setBandHigh(params.filter?.bandHigh ?? 3000);
-
       // Global
       setPortamento(params.portamento ?? 0);
       setNoiseLevel(params.noiseLevel ?? 0);
-      setNote(patch.note || 'C4');
       setDuration(patch.duration || '8n');
+      setMasterGain(params.masterGain ?? 1); // Load Master Gain
 
-      // Oscillators
+      // Oscillators - only new format supported
       if (Array.isArray(params.oscillators) && params.oscillators.length) {
         const [o1, o2] = params.oscillators;
         if (o1) {
-          setOscType(o1.type || 'sine');
-          setDetune(o1.detune || 0);
+          setOsc1Type(o1.type || 'sine');
+          setOsc1Detune(o1.detune || 0);
           setOsc1Gain(o1.gain ?? 1);
-          setOsc1Freq(o1.frequency ?? null);
+          setOsc1Freq(o1.frequency ?? 440);  // Default to A4 if not specified
           setOsc1SlideFrom(o1.slideFrom ?? null);
+          
+          // Oscillator 1 filter
+          if (o1.filter) {
+            setOsc1FilterType(o1.filter.type || 'none');
+            setOsc1Resonance(o1.filter.resonance ?? 1);
+            setOsc1Cutoff(o1.filter.cutoff ?? 1000);
+            setOsc1BandLow(o1.filter.bandLow ?? 300);
+            setOsc1BandHigh(o1.filter.bandHigh ?? 3000);
+          }
         }
         if (o2) {
           setOsc2Enabled(true);
           setOsc2Type(o2.type || 'square');
           setOsc2Detune(o2.detune || 0);
           setOsc2Gain(o2.gain ?? 0.8);
-          setOsc2Freq(o2.frequency ?? null);
+          setOsc2Freq(o2.frequency ?? 440);  // Default to A4 if not specified
           setOsc2SlideFrom(o2.slideFrom ?? null);
+          
+          // Oscillator 2 filter
+          if (o2.filter) {
+            setOsc2FilterType(o2.filter.type || 'none');
+            setOsc2Resonance(o2.filter.resonance ?? 1);
+            setOsc2Cutoff(o2.filter.cutoff ?? 1000);
+            setOsc2BandLow(o2.filter.bandLow ?? 300);
+            setOsc2BandHigh(o2.filter.bandHigh ?? 3000);
+          }
         }
-      } else {
-        // Legacy single-osc fields
-        setOscType(params.oscillator || 'sine');
-        setDetune(params.detune ?? 0);
-        setOsc1Gain(1);
-        setOsc1Freq(null);
-        setOsc1SlideFrom(null);
-        setOsc2Enabled(false);
       }
     } catch (err) {
       console.error('Failed to load patch from storage:', err);
@@ -183,12 +193,12 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     const maxDB = 0;
     const dbRange = maxDB - minDB;
     
-    // Margins for labels (significantly increased left margin)
+    // Margins for labels
     const margin = {
       top: 25,
       right: 20,
       bottom: 35,
-      left: 80  // Significantly increased from 55 to 80 for amplitude label
+      left: 80
     };
     
     const graphWidth = canvas.width - margin.left - margin.right;
@@ -206,26 +216,23 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       ctx.fillStyle = '#f8f9fa';
       ctx.fillRect(margin.left, margin.top, graphWidth, graphHeight);
       
-      // Vertical dB reference lines (evenly spaced)
+      // Vertical dB reference lines
       ctx.strokeStyle = '#e0e0e0';
       ctx.lineWidth = 1;
       ctx.font = '10px monospace';
       ctx.fillStyle = '#666';
       ctx.textAlign = 'right';
       
-      // dB levels from 0 to -80 in 20dB steps
       const dbLevels = [0, -20, -40, -60, -80];
       dbLevels.forEach(db => {
         const normalized = (db - minDB) / dbRange;
         const y = margin.top + (1 - normalized) * graphHeight;
         
-        // Grid line
         ctx.beginPath();
         ctx.moveTo(margin.left, y);
         ctx.lineTo(margin.left + graphWidth, y);
         ctx.stroke();
         
-        // Labels on left side (outside graph) - now plenty of space
         ctx.fillText(`${db} dB`, margin.left - 10, y + 3);
       });
 
@@ -234,19 +241,16 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       ctx.fillStyle = '#666';
       const freqLevels = [100, 500, 1000, 2000, 5000, 10000];
       freqLevels.forEach(freq => {
-        // Convert frequency to x position (logarithmic scale)
         const logFreq = Math.log10(freq);
         const logMin = Math.log10(50);
         const logMax = Math.log10(18000);
         const x = margin.left + ((logFreq - logMin) / (logMax - logMin)) * graphWidth;
         
-        // Grid line
         ctx.beginPath();
         ctx.moveTo(x, margin.top);
         ctx.lineTo(x, margin.top + graphHeight);
         ctx.stroke();
         
-        // Labels on bottom (outside graph)
         const label = freq < 1000 ? `${freq}` : `${freq/1000}k`;
         ctx.fillText(label, x, margin.top + graphHeight + 15);
       });
@@ -259,9 +263,9 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       ctx.textAlign = 'center';
       ctx.fillText('Frequency (Hz)', canvas.width / 2, canvas.height - 10);
       
-      // Vertical amplitude label - moved way to the left edge
+      // Vertical amplitude label
       ctx.save();
-      ctx.translate(15, canvas.height / 2); // Position at very left edge
+      ctx.translate(15, canvas.height / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = 'center';
       ctx.fillText('Amplitude (dB)', 0, 0);
@@ -277,16 +281,14 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     const drawSpectrum = () => {
       const buffer = analyser.getValue();
       
-      // Clear and redraw grid
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawReferenceGrid();
 
-      // Better audio detection - check for meaningful audio content
       let totalMagnitude = 0;
       let validPoints = 0;
       
       buffer.forEach(val => {
-        if (val < -1) { // Only count values below -1dB (not the flat 0dB line)
+        if (val < -1) {
           totalMagnitude += Math.abs(val);
           validPoints++;
         }
@@ -295,17 +297,15 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       const averageMagnitude = validPoints > 0 ? totalMagnitude / validPoints : 0;
       const currentTime = Date.now();
       
-      // More sensitive audio detection
-      const hasAudioContent = averageMagnitude > 5 && validPoints > 10; // Need significant audio
+      const hasAudioContent = averageMagnitude > 5 && validPoints > 10;
       
       if (hasAudioContent) {
         isPlaying = true;
         lastAudioTime = currentTime;
-      } else if (currentTime - lastAudioTime > 50) { // Short grace period
+      } else if (currentTime - lastAudioTime > 50) {
         isPlaying = false;
       }
 
-      // Only draw spectrum if we're actually playing meaningful audio
       if (isPlaying) {
         ctx.beginPath();
         ctx.strokeStyle = 'blue';
@@ -321,22 +321,16 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
         buffer.forEach((val, i) => {
           const freq = (i / buffer.length) * (sampleRate / 2);
           
-          // Skip frequencies outside our display range
           if (freq < 50 || freq > 18000) return;
-          
-          // Skip points that are just the 0dB flat line
           if (val >= -1) return;
           
-          // Convert to logarithmic x position
           const logFreq = Math.log10(freq);
           const x = margin.left + ((logFreq - logMin) / (logMax - logMin)) * graphWidth;
           
-          // Clamp dB values strictly to our reference frame
           const clampedDB = Math.max(minDB, Math.min(maxDB, val));
           const normalized = (clampedDB - minDB) / dbRange;
           const y = margin.top + (1 - normalized) * graphHeight;
           
-          // Ensure y is within graph bounds
           const clampedY = Math.max(margin.top, Math.min(margin.top + graphHeight, y));
           
           if (firstPoint) {
@@ -348,7 +342,6 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
           pointsDrawn++;
         });
         
-        // Only stroke if we have meaningful points
         if (pointsDrawn > 5) {
           ctx.stroke();
         }
@@ -357,7 +350,6 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       raf = requestAnimationFrame(drawSpectrum);
     };
 
-    // Initial draw (just the grid, no spectrum)
     drawReferenceGrid();
     raf = requestAnimationFrame(drawSpectrum);
     
@@ -371,64 +363,94 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     await Tone.start();
 
     const now = Tone.now();
-    const targetHzFromNote = Tone.Frequency(note).toFrequency();
 
     // Envelope
     const envelope = new Tone.AmplitudeEnvelope({ attack, decay, sustain, release });
 
-    // Filter
-    let filterNode = null;
-    if (filterType !== 'none') {
+    // Route: oscillators -> (individual filters) -> envelope -> master gain -> analyser -> destination
+    const analyserNode = analyser || new Tone.Analyser('fft', 128);
+    
+    // Add master gain
+    const master = new Tone.Gain(masterGain);
+    envelope.connect(master);
+    master.connect(analyserNode);
+    analyserNode.toDestination();
+
+    // Helper to create filter for an oscillator
+    const createFilter = (filterType, resonance, cutoff, bandLow, bandHigh) => {
+      if (filterType === 'none') return null;
+      
       if (filterType === 'bandpass') {
         const center = (bandLow + bandHigh) / 2;
         const bw = Math.max(10, bandHigh - bandLow);
-        filterNode = new Tone.Filter({ type: 'bandpass', frequency: center, Q: center / bw });
+        return new Tone.Filter({ type: 'bandpass', frequency: center, Q: center / bw });
       } else {
-        filterNode = new Tone.Filter({ type: filterType, frequency: cutoff, Q: resonance });
+        return new Tone.Filter({ type: filterType, frequency: cutoff, Q: resonance });
       }
-    }
+    };
 
-    // Route: oscillators -> (filter?) -> envelope -> analyser -> destination
-    const analyserNode = analyser || new Tone.Analyser('fft', 128);
-    if (filterNode) filterNode.connect(envelope);
-    envelope.connect(analyserNode);
-    analyserNode.toDestination();
-
-    // Helper to create an oscillator with optional glide
-    const buildOsc = ({ type, gain = 1, detuneCents = 0, freqHz = null, slideFromHz = null }) => {
-      const target = (freqHz ?? targetHzFromNote);
+    // Helper to create an oscillator with optional glide and individual filter
+    const buildOsc = ({ 
+      type, 
+      gain = 1, 
+      detuneCents = 0, 
+      freqHz = 440, 
+      slideFromHz = null,
+      filterType,
+      filterResonance,
+      filterCutoff,
+      filterBandLow,
+      filterBandHigh
+    }) => {
+      const target = freqHz;
       const startHz = (portamento > 0 && slideFromHz != null) ? slideFromHz : target;
 
       const osc = new Tone.Oscillator({ type, frequency: startHz, detune: detuneCents });
       const g = new Tone.Gain(gain);
       osc.connect(g);
-      if (filterNode) g.connect(filterNode);
-      else g.connect(envelope);
+      
+      // Create individual filter for this oscillator
+      const filter = createFilter(filterType, filterResonance, filterCutoff, filterBandLow, filterBandHigh);
+      if (filter) {
+        g.connect(filter);
+        filter.connect(envelope);
+      } else {
+        g.connect(envelope);
+      }
 
       if (portamento > 0 && startHz !== target) {
-        // Exponential glide sounds natural for pitch
         osc.frequency.exponentialRampToValueAtTime(target, now + portamento);
       }
-      return osc;
+      return { osc, gain: g, filter };
     };
 
-    // Oscillator 1 (always present)
+    // Oscillator 1 with individual filter
     const osc1 = buildOsc({
-      type: oscType,
+      type: osc1Type,
       gain: osc1Gain,
-      detuneCents: detune,
+      detuneCents: osc1Detune,
       freqHz: osc1Freq,
-      slideFromHz: osc1SlideFrom
+      slideFromHz: osc1SlideFrom,
+      filterType: osc1FilterType,
+      filterResonance: osc1Resonance,
+      filterCutoff: osc1Cutoff,
+      filterBandLow: osc1BandLow,
+      filterBandHigh: osc1BandHigh
     });
 
-    // Oscillator 2 (optional)
+    // Oscillator 2 with individual filter
     const osc2 = osc2Enabled
       ? buildOsc({
           type: osc2Type,
           gain: osc2Gain,
           detuneCents: osc2Detune,
           freqHz: osc2Freq,
-          slideFromHz: osc2SlideFrom
+          slideFromHz: osc2SlideFrom,
+          filterType: osc2FilterType,
+          filterResonance: osc2Resonance,
+          filterCutoff: osc2Cutoff,
+          filterBandLow: osc2BandLow,
+          filterBandHigh: osc2BandHigh
         })
       : null;
 
@@ -436,13 +458,12 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     const noiseNode = new Tone.Noise('white');
     noiseNode.volume.value = noiseLevel;
     if (noiseLevel > -60) {
-      if (filterNode) noiseNode.connect(filterNode);
-      else noiseNode.connect(envelope);
+      noiseNode.connect(envelope);
     }
 
     // Start + trigger
-    osc1.start(now);
-    if (osc2) osc2.start(now);
+    osc1.osc.start(now);
+    if (osc2) osc2.osc.start(now);
     if (noiseLevel > -60) {
       noiseNode.start(now);
       noiseNode.stop(now + Tone.Time(duration).toSeconds());
@@ -451,17 +472,25 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
 
     // Stop oscs after duration
     const stopAt = now + Tone.Time(duration).toSeconds() + 0.01;
-    osc1.stop(stopAt);
-    if (osc2) osc2.stop(stopAt);
+    osc1.osc.stop(stopAt);
+    if (osc2) osc2.osc.stop(stopAt);
 
     // Cleanup
     setTimeout(() => {
-      osc1.dispose();
-      if (osc2) osc2.dispose();
-      noiseNode.dispose();
+      osc1.osc.dispose();
+      osc1.gain.dispose();
+      if (osc1.filter) osc1.filter.dispose();
+      
+      if (osc2) {
+        osc2.osc.dispose();
+        osc2.gain.dispose();
+        if (osc2.filter) osc2.filter.dispose();
+      }
+      
+      if (noiseLevel > -60) noiseNode.dispose();
       if (!analyser) analyserNode.dispose();
-      if (filterNode) filterNode.dispose();
       envelope.dispose();
+      master.dispose(); // Add master to cleanup
     }, Tone.Time(duration).toMilliseconds() + 50);
   };
 
@@ -474,38 +503,38 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     const desc = (description || '').trim().slice(0, 500);
 
     const parameters = {
-      // New multi-osc payload
       oscillators: [
         {
-          type: oscType,
+          type: osc1Type,
           gain: osc1Gain,
-          detune,
-          frequency: osc1Freq,       // null => follow global note
-          slideFrom: osc1SlideFrom
+          detune: osc1Detune,
+          frequency: osc1Freq,
+          slideFrom: osc1SlideFrom,
+          filter: {
+            type: osc1FilterType,
+            resonance: osc1Resonance,
+            ...(osc1FilterType === 'lowpass' || osc1FilterType === 'highpass' ? { cutoff: osc1Cutoff } : {}),
+            ...(osc1FilterType === 'bandpass' ? { bandLow: osc1BandLow, bandHigh: osc1BandHigh } : {}),
+          }
         },
         ...(osc2Enabled ? [{
           type: osc2Type,
           gain: osc2Gain,
           detune: osc2Detune,
           frequency: osc2Freq,
-          slideFrom: osc2SlideFrom
+          slideFrom: osc2SlideFrom,
+          filter: {
+            type: osc2FilterType,
+            resonance: osc2Resonance,
+            ...(osc2FilterType === 'lowpass' || osc2FilterType === 'highpass' ? { cutoff: osc2Cutoff } : {}),
+            ...(osc2FilterType === 'bandpass' ? { bandLow: osc2BandLow, bandHigh: osc2BandHigh } : {}),
+          }
         }] : [])
       ],
-
-      // Envelope / filter / global params
       envelope: { attack, decay, sustain, release },
-      filter: {
-        type: filterType,
-        resonance,
-        ...(filterType === 'lowpass' || filterType === 'highpass' ? { cutoff } : {}),
-        ...(filterType === 'bandpass' ? { bandLow, bandHigh } : {}),
-      },
       portamento,
       noiseLevel,
-
-      // Legacy for backward compatibility
-      oscillator: oscType,
-      detune
+      masterGain // Add Master Gain to parameters
     };
 
     const payload = {
@@ -513,11 +542,12 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       description: desc,
       parameters,
       synth_type: 'tone',
-      note,
       duration,
       is_posted: false,
       ...(sourcePatchId ? { stem: sourcePatchId } : {})
     };
+
+    console.log('Saving patch with payload:', payload);
 
     try {
       const res = await axios.post('http://localhost:8000/api/patches/', payload, {
@@ -527,8 +557,11 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       alert(`Patch saved successfully as v${res.data.version || '0.0'}`);
       console.log('Saved patch response:', res.data);
     } catch (err) {
-      console.error('Error saving patch:', err?.response?.status, err?.response?.data || err);
-      alert('Failed to save patch.');
+      console.error('Full error object:', err);
+      console.error('Error response:', err.response);
+      console.error('Error status:', err.response?.status);
+      console.error('Error data:', err.response?.data);
+      alert(`Failed to save patch: ${err.response?.data?.detail || err.message}`);
     }
   };
   
@@ -537,33 +570,43 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     const parameters = {
       oscillators: [
         {
-          type: oscType,
+          type: osc1Type,
           gain: osc1Gain,
-          detune,
+          detune: osc1Detune,
           frequency: osc1Freq,
-          slideFrom: osc1SlideFrom
+          slideFrom: osc1SlideFrom,
+          filter: {
+            type: osc1FilterType,
+            resonance: osc1Resonance,
+            ...(osc1FilterType === 'lowpass' || osc1FilterType === 'highpass' ? { cutoff: osc1Cutoff } : {}),
+            ...(osc1FilterType === 'bandpass' ? { bandLow: osc1BandLow, bandHigh: osc1BandHigh } : {}),
+          }
         },
         ...(osc2Enabled ? [{
           type: osc2Type,
           gain: osc2Gain,
           detune: osc2Detune,
           frequency: osc2Freq,
-          slideFrom: osc2SlideFrom
+          slideFrom: osc2SlideFrom,
+          filter: {
+            type: osc2FilterType,
+            resonance: osc2Resonance,
+            ...(osc2FilterType === 'lowpass' || osc2FilterType === 'highpass' ? { cutoff: osc2Cutoff } : {}),
+            ...(osc2FilterType === 'bandpass' ? { bandLow: osc2BandLow, bandHigh: osc2BandHigh } : {}),
+          }
         }] : [])
       ],
       envelope: { attack, decay, sustain, release },
-      filter: {
-        type: filterType,
-        resonance,
-        ...(filterType === 'lowpass' || filterType === 'highpass' ? { cutoff } : {}),
-        ...(filterType === 'bandpass' ? { bandLow, bandHigh } : {}),
-      },
       portamento,
       noiseLevel,
-      oscillator: oscType,
-      detune
+      masterGain // Add Master Gain to parameters
     };
-    const savedPatch = { name, description, parameters, note, duration };
+    const savedPatch = { 
+      name, 
+      description, 
+      parameters, 
+      duration 
+    };
 
     const filename = `${name}spatch.json`;
     const blob = new Blob([JSON.stringify(savedPatch, null, 2)], { type: 'application/json' });
@@ -580,24 +623,44 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
     if (!onParamsChange) return;
     const current = {
       oscillators: [
-        { type: oscType, gain: osc1Gain, detune, frequency: osc1Freq, slideFrom: osc1SlideFrom },
-        ...(osc2Enabled ? [{ type: osc2Type, gain: osc2Gain, detune: osc2Detune, frequency: osc2Freq, slideFrom: osc2SlideFrom }] : [])
+        { 
+          type: osc1Type, 
+          gain: osc1Gain, 
+          detune: osc1Detune, 
+          frequency: osc1Freq, 
+          slideFrom: osc1SlideFrom,
+          filter: {
+            type: osc1FilterType,
+            resonance: osc1Resonance,
+            ...(osc1FilterType === 'lowpass' || osc1FilterType === 'highpass' ? { cutoff: osc1Cutoff } : {}),
+            ...(osc1FilterType === 'bandpass' ? { bandLow: osc1BandLow, bandHigh: osc1BandHigh } : {})
+          }
+        },
+        ...(osc2Enabled ? [{ 
+          type: osc2Type, 
+          gain: osc2Gain, 
+          detune: osc2Detune, 
+          frequency: osc2Freq, 
+          slideFrom: osc2SlideFrom,
+          filter: {
+            type: osc2FilterType,
+            resonance: osc2Resonance,
+            ...(osc2FilterType === 'lowpass' || osc2FilterType === 'highpass' ? { cutoff: osc2Cutoff } : {}),
+            ...(osc2FilterType === 'bandpass' ? { bandLow: osc2BandLow, bandHigh: osc2BandHigh } : {})
+          }
+        }] : [])
       ],
-      detune, portamento, noiseLevel, note, duration,
-      envelope: { attack, decay, sustain, release },
-      filter: {
-        type: filterType, resonance,
-        ...(filterType === 'lowpass' || filterType === 'highpass' ? { cutoff } : {}),
-        ...(filterType === 'bandpass' ? { bandLow, bandHigh } : {})
-      }
+      portamento, noiseLevel, duration, masterGain, // Add masterGain here
+      envelope: { attack, decay, sustain, release }
     };
     onParamsChange(current);
   }, [
-    oscType, detune, osc1Gain, osc1Freq, osc1SlideFrom,
+    osc1Type, osc1Detune, osc1Gain, osc1Freq, osc1SlideFrom,
     osc2Enabled, osc2Type, osc2Gain, osc2Detune, osc2Freq, osc2SlideFrom,
     attack, decay, sustain, release,
-    filterType, resonance, cutoff, bandLow, bandHigh,
-    portamento, noiseLevel, note, duration,
+    osc1FilterType, osc1Resonance, osc1Cutoff, osc1BandLow, osc1BandHigh,
+    osc2FilterType, osc2Resonance, osc2Cutoff, osc2BandLow, osc2BandHigh,
+    portamento, noiseLevel, duration, masterGain, // Add masterGain here
     onParamsChange
   ]);
 
@@ -606,7 +669,7 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
      ========================= */
   const HzHelper = ({ valueHz }) => {
     const d = describeHz(valueHz ?? 0);
-    if (!valueHz) return <div className="text-sm text-gray-600 mt-1">Type a frequency to see the nearest musical note</div>;
+    if (!valueHz) return <div className="text-sm text-gray-600 mt-1">Enter a frequency to see the nearest musical note</div>;
     return (
       <div className="text-sm text-gray-600 mt-1">
         ≈ {d.label} ({d.idealHz?.toFixed(2)} Hz) • {d.cents > 0 ? '+' : ''}{d.cents ?? 0} cents
@@ -620,6 +683,86 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
       <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(60))}>C4</button>
       <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(64))}>E4</button>
       <button className="px-2 py-1 border rounded" onClick={() => onSnap(midiToHz(67))}>G4</button>
+    </div>
+  );
+
+  // Filter UI component for reusability
+  const FilterUI = ({ 
+    filterType, setFilterType, 
+    resonance, setResonance, 
+    cutoff, setCutoff, 
+    bandLow, setBandLow, 
+    bandHigh, setBandHigh,
+    title 
+  }) => (
+    <div className="mt-3 p-3 border rounded">
+      <h4 className="font-semibold mb-2">{title}</h4>
+      <div>Type</div>
+      <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="p-2 border rounded w-full mb-3">
+        <option value="none">No Filter</option>
+        <option value="lowpass">Lowpass</option>
+        <option value="highpass">Highpass</option>
+        <option value="bandpass">Bandpass</option>
+      </select>
+
+      {filterType !== 'none' && (
+        <>
+          <div>Resonance (Q): {resonance.toFixed(1)}</div>
+          <input
+            type="range"
+            min="0.5"
+            max="30"
+            step="0.1"
+            value={resonance}
+            onChange={(e) => setResonance(parseFloat(e.target.value))}
+            className="w-full mb-3"
+          />
+
+          {(filterType === 'lowpass' || filterType === 'highpass') && (
+            <div className="mb-3">
+              <label className="block mb-1">Cutoff Frequency: {cutoff} Hz</label>
+              <input
+                type="range"
+                min="50"
+                max="10000"
+                step="10"
+                value={cutoff}
+                onChange={(e) => setCutoff(parseInt(e.target.value || '0', 10))}
+                className="w-full"
+              />
+            </div>
+          )}
+
+          {filterType === 'bandpass' && (
+            <>
+              <div className="mb-3">
+                <label className="block mb-1">Band Low: {bandLow} Hz</label>
+                <input
+                  type="range"
+                  min="50"
+                  max={Math.max(60, bandHigh - 10)}
+                  step="10"
+                  value={bandLow}
+                  onChange={(e) => setBandLow(parseInt(e.target.value || '0', 10))}
+                  className="w-full"
+                />
+              </div>
+              <div className="mb-1">
+                <label className="block mb-1">Band High: {bandHigh} Hz</label>
+                <input
+                  type="range"
+                  min={Math.min(9990, bandLow + 10)}
+                  max="10000"
+                  step="10"
+                  value={bandHigh}
+                  onChange={(e) => setBandHigh(parseInt(e.target.value || '0', 10))}
+                  className="w-full"
+                />
+              </div>
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 
@@ -671,8 +814,8 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
         <h3 className="font-semibold mb-2">Oscillator 1</h3>
         <label className="block mb-1">Type</label>
         <select
-          value={oscType}
-          onChange={(e) => setOscType(e.target.value)}
+          value={osc1Type}
+          onChange={(e) => setOsc1Type(e.target.value)}
           className="mb-3 p-2 border rounded w-full"
         >
           <option value="sine">Sine</option>
@@ -687,19 +830,18 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
         <div className="mb-3">{osc1Gain.toFixed(2)}</div>
 
         <label className="block">Detune (cents)</label>
-        <input type="number" step="1" value={detune}
-               onChange={(e) => setDetune(parseInt(e.target.value || '0', 10))}
+        <input type="number" step="1" value={osc1Detune}
+               onChange={(e) => setOsc1Detune(parseInt(e.target.value || '0', 10))}
                className="p-2 border rounded w-full mb-3" />
 
-        <label className="block">Frequency (Hz, blank = follow note)</label>
+        <label className="block">Frequency (Hz)</label>
         <input
           type="number"
           min="10"
           max="20000"
           step="0.1"
-          placeholder="follow note"
-          value={osc1Freq ?? ''}
-          onChange={(e) => setOsc1Freq(e.target.value === '' ? null : parseFloat(e.target.value))}
+          value={osc1Freq}
+          onChange={(e) => setOsc1Freq(parseFloat(e.target.value))}
           className="p-2 border rounded w-full"
         />
         <HzHelper valueHz={osc1Freq} />
@@ -712,6 +854,21 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
           value={osc1SlideFrom ?? ''}
           onChange={(e) => setOsc1SlideFrom(e.target.value === '' ? null : parseFloat(e.target.value))}
           className="p-2 border rounded w-full"
+        />
+
+        {/* Oscillator 1 Filter */}
+        <FilterUI
+          filterType={osc1FilterType}
+          setFilterType={setOsc1FilterType}
+          resonance={osc1Resonance}
+          setResonance={setOsc1Resonance}
+          cutoff={osc1Cutoff}
+          setCutoff={setOsc1Cutoff}
+          bandLow={osc1BandLow}
+          setBandLow={setOsc1BandLow}
+          bandHigh={osc1BandHigh}
+          setBandHigh={setOsc1BandHigh}
+          title="Oscillator 1 Filter"
         />
       </div>
 
@@ -746,15 +903,14 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
                    onChange={(e) => setOsc2Detune(parseInt(e.target.value || '0', 10))}
                    className="p-2 border rounded w-full mb-3" />
 
-            <label className="block">Frequency (Hz, blank = follow note)</label>
+            <label className="block">Frequency (Hz)</label>
             <input
               type="number"
               min="10"
               max="20000"
               step="0.1"
-              placeholder="follow note"
-              value={osc2Freq ?? ''}
-              onChange={(e) => setOsc2Freq(e.target.value === '' ? null : parseFloat(e.target.value))}
+              value={osc2Freq}
+              onChange={(e) => setOsc2Freq(parseFloat(e.target.value))}
               className="p-2 border rounded w-full"
             />
             <HzHelper valueHz={osc2Freq} />
@@ -768,78 +924,26 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
               onChange={(e) => setOsc2SlideFrom(e.target.value === '' ? null : parseFloat(e.target.value))}
               className="p-2 border rounded w-full"
             />
-          </>
-        )}
-      </div>
 
-      {/* Filter */}
-      <div className="mt-4 p-3 border rounded">
-        <h3 className="font-semibold mb-2">Filter</h3>
-        <div>Type</div>
-        <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="p-2 border rounded w-full mb-3">
-          <option value="none">No Filter</option>
-          <option value="lowpass">Lowpass</option>
-          <option value="highpass">Highpass</option>
-          <option value="bandpass">Bandpass</option>
-        </select>
-
-        <div>Resonance (Q): {resonance.toFixed(1)}</div>
-        <input
-          type="range"
-          min="0.5"
-          max="30"
-          step="0.1"
-          value={resonance}
-          onChange={(e) => setResonance(parseFloat(e.target.value))}
-          className="w-full mb-3"
-        />
-
-        {(filterType === 'lowpass' || filterType === 'highpass') && (
-          <div className="mb-3">
-            <label className="block mb-1">Cutoff Frequency: {cutoff} Hz</label>
-            <input
-              type="range"
-              min="50"
-              max="10000"
-              step="10"
-              value={cutoff}
-              onChange={(e) => setCutoff(parseInt(e.target.value || '0', 10))}
-              className="w-full"
+            {/* Oscillator 2 Filter */}
+            <FilterUI
+              filterType={osc2FilterType}
+              setFilterType={setOsc2FilterType}
+              resonance={osc2Resonance}
+              setResonance={setOsc2Resonance}
+              cutoff={osc2Cutoff}
+              setCutoff={setOsc2Cutoff}
+              bandLow={osc2BandLow}
+              setBandLow={setOsc2BandLow}
+              bandHigh={osc2BandHigh}
+              setBandHigh={setOsc2BandHigh}
+              title="Oscillator 2 Filter"
             />
-          </div>
-        )}
-
-        {filterType === 'bandpass' && (
-          <>
-            <div className="mb-3">
-              <label className="block mb-1">Band Low: {bandLow} Hz</label>
-              <input
-                type="range"
-                min="50"
-                max={Math.max(60, bandHigh - 10)}
-                step="10"
-                value={bandLow}
-                onChange={(e) => setBandLow(parseInt(e.target.value || '0', 10))}
-                className="w-full"
-              />
-            </div>
-            <div className="mb-1">
-              <label className="block mb-1">Band High: {bandHigh} Hz</label>
-              <input
-                type="range"
-                min={Math.min(9990, bandLow + 10)}
-                max="10000"
-                step="10"
-                value={bandHigh}
-                onChange={(e) => setBandHigh(parseInt(e.target.value || '0', 10))}
-                className="w-full"
-              />
-            </div>
           </>
         )}
       </div>
 
-      {/* Env / Glide / Noise / Legacy note */}
+      {/* Env / Glide / Noise / Master Gain */}
       <div className="mt-4 p-3 border rounded">
         <h3 className="font-semibold mb-2">Envelope & Global</h3>
 
@@ -867,22 +971,18 @@ const SynthInterface = ({ onParamsChange, initialParams = null, hideNameAndDescr
         <input type="range" min="-60" max="0" step="1" value={noiseLevel}
                onChange={(e) => setNoiseLevel(parseInt(e.target.value || '-60', 10))} className="w-full" />
 
-        <div className="grid grid-cols-2 gap-3 mt-3">
-          <div>
-            <label className="block">Legacy Note (fallback)</label>
-            <input
-              type="text"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              className="p-2 border rounded w-full"
-            />
-          </div>
-          <div>
-            <label className="block">Duration</label>
-            <select value={duration} onChange={(e) => setDuration(e.target.value)} className="p-2 border rounded w-full">
-              {durationOptions.map(d => <option key={d} value={d}>{d}</option>)}
-            </select>
-          </div>
+        {/* Add Master Gain control */}
+        <div className="mt-3">
+          <div>Master Gain: {masterGain.toFixed(2)}</div>
+          <input type="range" min="0" max="2" step="0.01" value={masterGain}
+                 onChange={(e) => setMasterGain(parseFloat(e.target.value))} className="w-full" />
+        </div>
+
+        <div className="mt-3">
+          <label className="block">Duration</label>
+          <select value={duration} onChange={(e) => setDuration(e.target.value)} className="p-2 border rounded w-full">
+            {durationOptions.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
         </div>
       </div>
 
