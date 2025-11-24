@@ -47,6 +47,25 @@ const fmtTime = (seconds) => {
 const snap16 = (beats) => Math.max(0, Math.round(beats * 4) / 4); // 1/16 note
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
+// NEW: Convert Tone.js durations to beats
+const convertDurationToBeats = (duration, bpm = 120) => {
+  if (typeof duration === 'number') {
+    return duration; // Assume it's already in beats
+  }
+  
+  // Convert Tone.js duration strings to beats
+  const durationMap = {
+    '1n': 4,    // whole note = 4 beats
+    '2n': 2,    // half note = 2 beats  
+    '4n': 1,    // quarter note = 1 beat
+    '8n': 0.5,  // eighth note = 0.5 beats
+    '16n': 0.25, // sixteenth note = 0.25 beats
+    '32n': 0.125 // thirty-second note = 0.125 beats
+  };
+  
+  return durationMap[duration] || 1; // Default to 1 beat
+};
+
 // Extract a patch id from various shapes we might see
 const getPatchId = (p) => {
   if (!p) return null;
@@ -69,7 +88,7 @@ const toSerializablePatch = (p) => {
     name: p.name ?? p.displayName ?? null,
     displayName: p.displayName ?? null,
     note: p.note ?? 'C4',
-    duration: p.duration ?? '8n',
+    duration: p.duration ?? '8n', // Preserve duration
     parameters: p.parameters ?? p.params ?? null,
     is_deleted: p.is_deleted ?? false,
   };
@@ -85,7 +104,7 @@ const normalizeServerPatch = (p, idOverride = null) => {
     name: nameLike ?? (id != null ? `Patch ${id}` : null),
     displayName: nameLike ?? undefined,
     note: p?.note || 'C4',
-    duration: p?.duration || '8n',
+    duration: p?.duration || '8n', // Preserve duration
     parameters: params,
     is_deleted: p?.is_deleted ?? false,
   };
@@ -547,7 +566,10 @@ export default function ComposePanel() {
       ch.steps.forEach((on, stepIndex) => {
         if (!on) return;
         const startBeat = stepIndex / 4;
-        const lengthBeatsLocal = 1 / 4;
+        
+        // Use the patch's actual duration or default to 1 beat
+        const patchDuration = ch.patch?.duration || '4n';
+        const lengthBeatsLocal = convertDurationToBeats(patchDuration, bpm);
 
         const patchSer = toSerializablePatch(ch.patch);
         if (!patchSer?.id) {
@@ -563,7 +585,10 @@ export default function ComposePanel() {
             ch.patch?.displayName ||
             ch.patch?.name ||
             (laneMeta?.[targetLane]?.name ?? `Ch ${targetLane + 1}`),
-          patch: patchSer,
+          patch: {
+            ...patchSer,
+            duration: patchDuration, // Preserve the original duration string
+          },
         });
       });
     });
@@ -600,6 +625,10 @@ export default function ComposePanel() {
       ch.steps.forEach((on, stepIndex) => {
         if (!on) return;
 
+        // Use the patch's actual duration or default to 1 beat
+        const patchDuration = ch.patch?.duration || '4n';
+        const lengthBeatsLocal = convertDurationToBeats(patchDuration, bpm);
+
         const patchSer = toSerializablePatch(ch.patch);
         if (!patchSer?.id) {
           console.warn('Channel Rack patch missing id at lane', lane, 'step', stepIndex, ch.patch);
@@ -609,9 +638,12 @@ export default function ComposePanel() {
           id: `${lane}-${stepIndex}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
           lane,
           startBeat: stepIndex / 4,
-          lengthBeats: 1 / 4,
+          lengthBeats: lengthBeatsLocal,
           label: ch.patch?.displayName || ch.patch?.name || `Ch ${lane + 1}`,
-          patch: patchSer,
+          patch: {
+            ...patchSer,
+            duration: patchDuration, // Preserve the original duration string
+          },
         });
       });
     });
@@ -659,7 +691,7 @@ export default function ComposePanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loopEnabled, loopRegion]);
 
-  // ===== scheduleAndStart with just-in-time enrichment =====
+  // ===== scheduleAndStart with just-in-time enrichment AND duration handling =====
   const scheduleAndStart = async () => {
     await Tone.start();
     const transport = Tone.getTransport();
@@ -727,7 +759,7 @@ export default function ComposePanel() {
       }
     }
 
-    // Schedule all playable clips with resolved parameters
+    // Schedule all playable clips with resolved parameters AND duration handling
     playable.forEach((clip) => {
       const pid = getPatchId(clip.patch);
       const resolved =
@@ -738,13 +770,21 @@ export default function ComposePanel() {
       if (!resolved?.parameters || resolved?.is_deleted) return; // cannot play without a synth snapshot or if deleted
 
       const triggerAtSec = clip.startBeat * secPerBeat;
+      
+      // NEW: Calculate the actual playback duration - the shorter of:
+      // 1. The visual clip length (user-resized)
+      // 2. The patch's configured duration
+      const visualDurationSec = clip.lengthBeats * secPerBeat;
+      const patchDurationSec = Tone.Time(resolved.duration || '8n').toSeconds();
+      const actualDurationSec = Math.min(visualDurationSec, patchDurationSec);
+      
       transport.schedule((time) => {
         try {
           PlayPatch({
             ...resolved,
             // ensure sane defaults
             note: resolved.note || 'C4',
-            duration: resolved.duration || '8n',
+            duration: actualDurationSec, // Use the shorter duration
           }, time);
         } catch (e) {
           console.warn('PlayPatch failed for patch', clip, e);
@@ -1207,13 +1247,12 @@ export default function ComposePanel() {
 
     const lane = clamp(Number(selectedImportLane) || 0, 0, Math.max(0, lanes - 1));
     const startBeatLocal = snap16(playheadBeat || 0);
-    const lengthBeatsLocal = 1;
+    
+    // NEW: Use the patch's actual duration or default to 1 beat
+    const patchDuration = p.duration || '4n';
+    const lengthBeatsLocal = convertDurationToBeats(patchDuration, bpm);
 
-    const label =
-      p.displayName?.trim?.() ||
-      p.name?.trim?.() ||
-      laneMeta?.[lane]?.name ||
-      `Lane ${lane + 1}`;
+    const label = p.displayName?.trim?.() || p.name?.trim?.() || laneMeta?.[lane]?.name || `Lane ${lane + 1}`;
 
     const patchSer = toSerializablePatch(p);
     if (!patchSer?.id) {
@@ -1224,9 +1263,12 @@ export default function ComposePanel() {
       id: `${lane}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
       lane,
       startBeat: startBeatLocal,
-      lengthBeats: lengthBeatsLocal,
+      lengthBeats: lengthBeatsLocal, // Use actual duration instead of fixed 1
       label,
-      patch: patchSer,
+      patch: {
+        ...patchSer,
+        duration: patchDuration, // Preserve the original duration string
+      },
     };
 
     setClips(prev => {

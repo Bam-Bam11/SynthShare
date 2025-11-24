@@ -338,7 +338,6 @@ class Track(models.Model):
         return inst
 
 
-
     # --------------------------
     # Core lineage/versioning (mirror Patch.save)
     # --------------------------
@@ -477,3 +476,24 @@ class Track(models.Model):
             except Exception:
                 continue
         return (max(fork_indices) + 1) if fork_indices else 1  # after 0.0, first fork is 1.0
+    
+class DirectMessage(models.Model):
+    sender = models.ForeignKey(
+        User,
+        related_name='sent_messages',
+        on_delete=models.CASCADE
+    )
+    recipient = models.ForeignKey(
+        User,
+        related_name='received_messages',
+        on_delete=models.CASCADE
+    )
+    content = models.TextField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f'{self.sender} -> {self.recipient}: {self.content[:40]}'

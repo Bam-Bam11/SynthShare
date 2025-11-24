@@ -4,7 +4,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from django.contrib.auth.models import User
 
-from .models import Patch, Follow, Track
+from .models import Patch, Follow, Track, DirectMessage  
 
 
 # --------------------------
@@ -245,3 +245,46 @@ class TrackSerializer(serializers.ModelSerializer):
             setattr(instance, attr, val)
         instance.save()
         return instance
+    
+# --------------------------
+# Messenger
+# --------------------------
+
+
+class DirectMessageSerializer(serializers.ModelSerializer):
+    sender_username = serializers.ReadOnlyField(source='sender.username')
+    recipient_username = serializers.ReadOnlyField(source='recipient.username')
+
+    class Meta:
+        model = DirectMessage
+        fields = [
+            'id',
+            'sender', 'sender_username',
+            'recipient', 'recipient_username',
+            'content',
+            'created_at',
+            'is_read',
+        ]
+        read_only_fields = ['sender', 'created_at', 'is_read', 'sender_username', 'recipient_username']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            raise ValidationError({'detail': 'Authentication required to send a message.'})
+
+        # The API will give us recipient + content, we set sender here
+        sender = request.user
+        recipient = validated_data.get('recipient')
+
+        if recipient is None:
+            raise ValidationError({'recipient': 'Recipient is required.'})
+
+        if sender == recipient:
+            raise ValidationError({'recipient': 'You cannot send messages to yourself.'})
+
+        msg = DirectMessage.objects.create(
+            sender=sender,
+            recipient=recipient,
+            content=validated_data['content'],
+        )
+        return msg

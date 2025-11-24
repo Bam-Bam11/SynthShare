@@ -34,6 +34,15 @@ function LoginForm({ setToken, onShowRegister }) {
 
   return (
     <div className="login-page">
+      {/* Tagline floating near the top-left */}
+      <div className="login-tagline-wrapper">
+        <p className="login-tagline">
+          Learn digital synthesis<br />
+          and share your creations.
+        </p>
+      </div>
+
+      {/* Centred login card */}
       <form onSubmit={handleSubmit} className="login-form">
         <h2>Login</h2>
 
@@ -59,7 +68,6 @@ function LoginForm({ setToken, onShowRegister }) {
 
         {error && <p className="error">{error}</p>}
 
-        {/* CTA inside the card */}
         <div className="login-footer">
           <span>Don't have an account? </span>
           <button
@@ -73,6 +81,9 @@ function LoginForm({ setToken, onShowRegister }) {
       </form>
     </div>
   );
+
+
+
 }
 
 export default LoginForm;

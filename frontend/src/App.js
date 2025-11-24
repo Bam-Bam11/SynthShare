@@ -25,6 +25,7 @@ import UserSavedPatches from './pages/UserSavedPatches';
 import BuildComposePage from './pages/BuildComposePage';
 import TrackDetail from './pages/trackdetail';
 import AppBackground from './components/AppBackground';
+import MessagesPage from './pages/MessagesPage';
 
 // Logos
 import logoLight from './assets/synthspore-logo.PNG';            // Light mode
@@ -224,6 +225,8 @@ function InnerApp({ setUserId }) {
         <Route path="/users/:username/saved" element={<UserSavedPatches />} />
         <Route path="/build" element={<BuildComposePage />} />
         <Route path="*" element={<Navigate to={`/profile/${username}`} />} />
+        <Route path="/messages" element={<MessagesPage />} />
+        <Route path="/messages/:username" element={<MessagesPage />} />
       </Routes>
     </div>
   );

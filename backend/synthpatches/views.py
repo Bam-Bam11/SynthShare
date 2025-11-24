@@ -10,8 +10,8 @@ from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 
-from .models import Patch, Follow, Track
-from .serializers import PatchSerializer, UserSerializer, FollowSerializer, TrackSerializer
+from .models import Patch, Follow, Track, DirectMessage
+from .serializers import PatchSerializer, UserSerializer, FollowSerializer, TrackSerializer, DirectMessageSerializer
 from .pagination import SmallPageNumberPagination
 
 
@@ -744,3 +744,65 @@ def fork_track(request, pk):
     serializer.is_valid(raise_exception=True)
     track = serializer.save()
     return Response(TrackSerializer(track, context={'request': request}).data, status=201)
+
+class DirectMessageViewSet(viewsets.ModelViewSet):
+    serializer_class = DirectMessageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = DirectMessage.objects.filter(
+            Q(sender=user) | Q(recipient=user)
+        )
+
+        # Optional: filter to a single conversation
+        other_user_id = self.request.query_params.get('other_user')
+        if other_user_id:
+            qs = qs.filter(
+                (Q(sender=user) & Q(recipient_id=other_user_id)) |
+                (Q(recipient=user) & Q(sender_id=other_user_id))
+            )
+        return qs.order_by('created_at')
+
+    def perform_create(self, serializer):
+        # sender forced to current user
+        serializer.save(sender=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def unread_count(self, request):
+        count = DirectMessage.objects.filter(
+            recipient=request.user,
+            is_read=False
+        ).count()
+        return Response({'unread_count': count})
+
+    @action(detail=False, methods=['post'])
+    def mark_conversation_read(self, request):
+        """
+        POST /api/messages/mark_conversation_read/
+        body: { "other_user": <id> }
+        Marks all messages from other_user → current user as read.
+        """
+        other = request.data.get('other_user')
+        if not other:
+            return Response({'detail': 'other_user is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        qs = DirectMessage.objects.filter(
+            sender_id=other,
+            recipient=request.user,
+            is_read=False,
+        )
+        updated = qs.update(is_read=True)
+        return Response({'updated': updated})
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """Mark a single message as read."""
+        msg = self.get_object()
+        if msg.recipient != request.user:
+            return Response({'detail': 'You may only mark your own received messages as read.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        if not msg.is_read:
+            msg.is_read = True
+            msg.save(update_fields=['is_read'])
+        return Response({'status': 'ok'})

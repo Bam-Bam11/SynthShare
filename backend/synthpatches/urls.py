@@ -18,6 +18,7 @@ from .views import (
     TrackViewSet, 
     fork_track, 
     track_lineage_view, 
+    DirectMessageViewSet,
 )
 
 router = DefaultRouter()
@@ -25,6 +26,8 @@ router.register(r'patches', PatchViewSet, basename='patch')
 router.register(r'users', UserViewSet, basename='user')
 router.register(r'follows', FollowViewSet, basename='follow')
 router.register(r'tracks', TrackViewSet, basename='track')
+router.register(r'messages', DirectMessageViewSet, basename='message') 
+
 
 urlpatterns = [
     path('register/', register),
