@@ -156,6 +156,61 @@ class UserViewSet(viewsets.ReadOnlyModelViewSet):
     search_fields = ['username']
     lookup_field = 'username'
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+
+    @action(detail=True, methods=['post'])
+    def follow(self, request, username=None):
+        """Follow a user"""
+        user_to_follow = self.get_object()
+        
+        if request.user == user_to_follow:
+            return Response({'error': 'Cannot follow yourself'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if already following
+        if Follow.objects.filter(follower=request.user, following=user_to_follow).exists():
+            return Response({'error': 'Already following this user'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create follow relationship
+        Follow.objects.create(follower=request.user, following=user_to_follow)
+        
+        return Response({
+            'status': 'followed',
+            'message': f'You are now following {username}'
+        })
+
+    @action(detail=True, methods=['delete'])
+    def unfollow(self, request, username=None):
+        """Unfollow a user"""
+        user_to_unfollow = self.get_object()
+        
+        try:
+            follow = Follow.objects.get(follower=request.user, following=user_to_unfollow)
+            follow.delete()
+            return Response({
+                'status': 'unfollowed',
+                'message': f'You have unfollowed {username}'
+            })
+        except Follow.DoesNotExist:
+            return Response({'error': 'Not following this user'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def check_follow(self, request, username=None):
+        """Check if current user is following this user"""
+        user_to_check = self.get_object()
+        
+        is_following = Follow.objects.filter(
+            follower=request.user, 
+            following=user_to_check
+        ).exists()
+        
+        return Response({
+            'is_following': is_following,
+            'username': username
+        })
+
 
 @api_view(['POST'])
 def register(request):
@@ -274,6 +329,21 @@ def feed_view(request):
     paginator = SmallPageNumberPagination()
     page = paginator.paginate_queryset(qs, request)
     serializer = PatchSerializer(page, many=True, context={'request': request})
+    return paginator.get_paginated_response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def tracks_feed_view(request):
+    """Feed of tracks from followed users only"""
+    user = request.user
+    followed_users = Follow.objects.filter(follower=user).values_list('following', flat=True)
+    # Exclude deleted tracks from feed
+    qs = Track.objects.filter(uploaded_by__in=followed_users, is_posted=True).order_by('-created_at')
+
+    paginator = SmallPageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    serializer = TrackSerializer(page, many=True, context={'request': request})
     return paginator.get_paginated_response(serializer.data)
 
 

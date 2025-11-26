@@ -80,6 +80,15 @@ html, body, #root { height: 100%; margin: 0; }
   --btn-post-fg: var(--btn-accent-fg);
   --btn-post-hover: var(--btn-accent-hover);
 
+  /* Follow/Unfollow specific tokens */
+  --btn-follow-bg: #007bff;       /* blue-600 */
+  --btn-follow-fg: #ffffff;
+  --btn-follow-hover: #0056b3;    /* blue-700 */
+
+  --btn-unfollow-bg: #6c757d;     /* gray */
+  --btn-unfollow-fg: #ffffff;
+  --btn-unfollow-hover: #5a6268;  /* darker gray */
+
   /* Scoped text overrides (light mode defaults) */
   --btn-edit-fg: #ffffff;         /* Edit/Fork text in light */
   --btn-save-fg: #ffffff;         /* Save text in light */
@@ -163,6 +172,15 @@ body.theme-dark {
   --btn-post-fg: #0b0f1a;         /* black text */
   --btn-post-hover: var(--btn-accent-hover);
 
+  /* Follow/Unfollow dark overrides */
+  --btn-follow-bg: #3b82f6;       /* blue-500 */
+  --btn-follow-fg: #ffffff;
+  --btn-follow-hover: #2563eb;    /* blue-600 */
+
+  --btn-unfollow-bg: #6b7280;     /* gray-500 */
+  --btn-unfollow-fg: #ffffff;
+  --btn-unfollow-hover: #4b5563;  /* gray-600 */
+
   /* Scoped text overrides (dark mode) */
   --btn-edit-fg: #0b0f1a;         /* Edit/Fork black text in dark */
   --btn-save-fg: #0b0f1a;         /* Save black text in dark */
@@ -241,6 +259,7 @@ button,
   gap: 0.5rem;
   cursor: pointer;
   user-select: none;
+  transition: all 0.2s ease;
 }
 button:hover, .btn:hover { background-color: var(--btn-hover) !important; }
 button:focus, .btn:focus {
@@ -335,6 +354,28 @@ button:disabled, .btn:disabled { opacity: 0.65; cursor: not-allowed; }
 .btn-unpost:hover {
   background-color: var(--btn-unpost-hover) !important;
   border-color: var(--btn-unpost-hover) !important;
+}
+
+/* Follow Button */
+.btn-follow {
+  background-color: var(--btn-follow-bg) !important;
+  color: var(--btn-follow-fg) !important;
+  border-color: var(--btn-follow-bg) !important;
+}
+.btn-follow:hover {
+  background-color: var(--btn-follow-hover) !important;
+  border-color: var(--btn-follow-hover) !important;
+}
+
+/* Unfollow Button */
+.btn-unfollow {
+  background-color: var(--btn-unfollow-bg) !important;
+  color: var(--btn-unfollow-fg) !important;
+  border-color: var(--btn-unfollow-bg) !important;
+}
+.btn-unfollow:hover {
+  background-color: var(--btn-unfollow-hover) !important;
+  border-color: var(--btn-unfollow-hover) !important;
 }
 
 /* Edit/Fork: blue with inverted text in dark mode */

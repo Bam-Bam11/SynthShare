@@ -20,7 +20,7 @@ const SearchResults = () => {
   const [followingMap, setFollowingMap] = useState({});
   const [loadingFollow, setLoadingFollow] = useState({});
 
-  // Fetch search results
+  // Fetch search results and follow status
   useEffect(() => {
     if (!query.trim()) {
       setData({ results: [], count: 0, next: null, previous: null });
@@ -34,12 +34,29 @@ const SearchResults = () => {
         const count = Array.isArray(payload) ? payload.length : (payload.count ?? results.length);
         setData({ results, count, next: payload.next ?? null, previous: payload.previous ?? null });
         
-        // Initialize following state for each user
-        const initialFollowingState = {};
-        results.forEach(user => {
-          initialFollowingState[user.id] = user.is_following || false;
+        // Fetch follow status for each user
+        const followPromises = results.map(user => 
+          API.get(`/users/${user.username}/check_follow/`)
+            .then(response => ({
+              userId: user.id,
+              isFollowing: response.data.is_following
+            }))
+            .catch(error => {
+              console.error(`Failed to check follow status for ${user.username}:`, error);
+              return {
+                userId: user.id,
+                isFollowing: false
+              };
+            })
+        );
+
+        Promise.all(followPromises).then(followResults => {
+          const initialFollowingState = {};
+          followResults.forEach(result => {
+            initialFollowingState[result.userId] = result.isFollowing;
+          });
+          setFollowingMap(initialFollowingState);
         });
-        setFollowingMap(initialFollowingState);
       })
       .catch((err) => {
         console.error('User search failed:', err);
@@ -49,16 +66,16 @@ const SearchResults = () => {
   }, [query, page, pageSize]);
 
   // Follow/Unfollow function
-  const handleFollowToggle = async (userId, currentlyFollowing) => {
+  const handleFollowToggle = async (userId, username, currentlyFollowing) => {
     setLoadingFollow(prev => ({ ...prev, [userId]: true }));
     
     try {
       if (currentlyFollowing) {
         // Unfollow
-        await API.delete(`/users/${userId}/follow/`);
+        await API.delete(`/users/${username}/unfollow/`);
       } else {
         // Follow
-        await API.post(`/users/${userId}/follow/`);
+        await API.post(`/users/${username}/follow/`);
       }
       
       // Update local state
@@ -68,7 +85,8 @@ const SearchResults = () => {
       }));
     } catch (error) {
       console.error('Follow toggle failed:', error);
-      alert('Failed to update follow status');
+      const errorMessage = error.response?.data?.error || error.response?.data?.detail || 'Failed to update follow status';
+      alert(`Error: ${errorMessage}`);
     } finally {
       setLoadingFollow(prev => ({ ...prev, [userId]: false }));
     }
@@ -94,9 +112,11 @@ const SearchResults = () => {
               borderRadius: 8,
               display: 'flex',
               justifyContent: 'space-between',
-              alignItems: 'center'
+              alignItems: 'center',
+              position: 'relative',
+              minHeight: '60px'
             }}>
-              <div>
+              <div style={{ flex: 1 }}>
                  <Link to={`/profile/${user.username}`} style={{ textDecoration: 'none', fontWeight: 'bold' }}>
                   {user.username}
                 </Link>
@@ -107,34 +127,42 @@ const SearchResults = () => {
                 )}
               </div>
               
-              {/* Follow/Unfollow Button */}
-              <button
-                onClick={() => handleFollowToggle(user.id, followingMap[user.id])}
-                disabled={loadingFollow[user.id]}
-                style={{
-                  padding: '6px 12px',
-                  border: '1px solid #ccc',
-                  borderRadius: 4,
-                  background: followingMap[user.id] ? '#e0e0e0' : '#007bff',
-                  color: followingMap[user.id] ? '#333' : 'white',
-                  cursor: loadingFollow[user.id] ? 'not-allowed' : 'pointer',
-                  opacity: loadingFollow[user.id] ? 0.6 : 1
-                }}
-              >
-                {loadingFollow[user.id] ? '...' : followingMap[user.id] ? 'Unfollow' : 'Follow'}
-              </button>
+              {/* Follow/Unfollow Button - Using CSS classes */}
+              <div style={{ 
+                position: 'relative',
+                width: '100px',
+                height: '36px',
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center'
+              }}>
+                <button
+                  onClick={() => handleFollowToggle(user.id, user.username, followingMap[user.id])}
+                  disabled={loadingFollow[user.id]}
+                  className={followingMap[user.id] ? "btn btn-unfollow" : "btn btn-follow"}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  {loadingFollow[user.id] ? '...' : followingMap[user.id] ? 'Unfollow' : 'Follow'}
+                </button>
+              </div>
             </li>
           ))}
         </ul>
       )}
 
-      {/* Pagination */}
+      {/* Pagination - Using CSS classes */}
       {data.results.length > 0 && (
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 20, justifyContent: 'center' }}>
           <button 
             disabled={page <= 1} 
             onClick={() => goPage(page - 1)}
-            style={{ padding: '8px 16px', border: '1px solid #ccc', borderRadius: 4 }}
+            className={page <= 1 ? "btn" : "btn btn-primary"}
           >
             Previous
           </button>
@@ -142,7 +170,7 @@ const SearchResults = () => {
           <button 
             disabled={page >= totalPages} 
             onClick={() => goPage(page + 1)}
-            style={{ padding: '8px 16px', border: '1px solid #ccc', borderRadius: 4 }}
+            className={page >= totalPages ? "btn" : "btn btn-primary"}
           >
             Next
           </button>

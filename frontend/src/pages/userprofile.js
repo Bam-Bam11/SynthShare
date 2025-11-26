@@ -157,19 +157,22 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
       });
   }, [username]);
 
-  // Follow handlers
+  // Follow handlers - FIXED: Use same endpoints as SearchResults
   const handleFollow = async () => {
     if (!user || followBusy) return;
     setFollowBusy(true);
     setIsFollowing(true);
     setFollowerCount(c => c + 1);
     try {
-      await API.post('/follows/', { following: user.id });
+      // Use the same endpoint as SearchResults
+      await API.post(`/users/${user.username}/follow/`);
       await refreshHeader(user.username);
     } catch (err) {
       console.error('Failed to follow:', err?.response?.data || err);
       setIsFollowing(false);
       setFollowerCount(c => Math.max(0, c - 1));
+      const errorMessage = err.response?.data?.error || err.response?.data?.detail || 'Failed to follow user';
+      alert(`Error: ${errorMessage}`);
     } finally {
       setFollowBusy(false);
     }
@@ -181,12 +184,15 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
     setIsFollowing(false);
     setFollowerCount(c => Math.max(0, c - 1));
     try {
-      await API.post('/follows/unfollow/', { following: user.id });
+      // Use the same endpoint as SearchResults
+      await API.delete(`/users/${user.username}/unfollow/`);
       await refreshHeader(user.username);
     } catch (err) {
       console.error('Failed to unfollow:', err?.response?.data || err);
       setIsFollowing(true);
       setFollowerCount(c => c + 1);
+      const errorMessage = err.response?.data?.error || err.response?.data?.detail || 'Failed to unfollow user';
+      alert(`Error: ${errorMessage}`);
     } finally {
       setFollowBusy(false);
     }
@@ -405,12 +411,47 @@ const UserProfile = ({ isSelfProfile: propIsSelfProfile = false }) => {
         </Link>
       </p>
 
+
       {!isSelfProfile && (
-        isFollowing ? (
-          <button className="btn btn-ghost" onClick={handleUnfollow} disabled={followBusy}>Unfollow</button>
-        ) : (
-          <button className="btn btn-primary" onClick={handleFollow} disabled={followBusy}>Follow</button>
-        )
+        <div style={{ 
+          position: 'relative',
+          width: '100px', 
+          height: '36px',
+          marginTop: '10px',
+          marginBottom: '20px'
+        }}>
+          {isFollowing ? (
+            <button 
+              onClick={handleUnfollow} 
+              disabled={followBusy}
+              className="btn btn-unfollow"
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+            >
+              {followBusy ? '...' : 'Unfollow'}
+            </button>
+          ) : (
+            <button 
+              onClick={handleFollow} 
+              disabled={followBusy}
+              className="btn btn-follow"
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+            >
+              {followBusy ? '...' : 'Follow'}
+            </button>
+          )}
+        </div>
       )}
 
       {/* Posted Patches */}

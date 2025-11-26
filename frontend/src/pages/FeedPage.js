@@ -51,8 +51,8 @@ const FeedPage = () => {
       }
 
       try {
-        // ---- tracks feed - use regular tracks endpoint with posted filter ----
-        const t = await API.get(`/tracks/?page=1&page_size=${PAGE_SIZE}`);
+        // ---- tracks feed - use the new tracks-feed endpoint ----
+        const t = await API.get(`/tracks-feed/?page=1&page_size=${PAGE_SIZE}`); // CHANGED THIS LINE
         const tdata = t?.data;
         const tlist = Array.isArray(tdata?.results)
           ? tdata.results
@@ -243,7 +243,7 @@ const FeedPage = () => {
 
           <h3 className="mt-4">Tracks</h3>
           {tracks.length === 0 ? (
-            <p>No tracks available.</p>
+            <p>No tracks from followed users yet.</p>
           ) : (
             <ul>
               {tracks.map((t) => (
